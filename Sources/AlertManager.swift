@@ -3,6 +3,13 @@ import UserNotifications
 
 class AlertManager {
     private var activeAlerts: [String: AlertState] = [:]
+    private var notificationsAvailable: Bool
+    
+    init() {
+        // Check if we're running as a proper app bundle
+        // UNUserNotificationCenter requires a valid bundle identifier
+        notificationsAvailable = Bundle.main.bundleIdentifier != nil
+    }
     
     func sendAlert(instanceId: String, message: String, metrics: RDSMetrics) {
         let currentMetrics = getAlertingMetrics(metrics: metrics)
@@ -40,13 +47,14 @@ class AlertManager {
     private func getAlertingMetrics(metrics: RDSMetrics) -> Set<String> {
         var alerting = Set<String>()
         
-        if metrics.cpuUtilization > 50 {
+        // Ignore -1 (N/A) values
+        if metrics.cpuUtilization >= 0 && metrics.cpuUtilization > 50 {
             alerting.insert("cpu")
         }
-        if metrics.connectionsUsedPercent > 50 {
+        if metrics.connectionsUsedPercent >= 0 && metrics.connectionsUsedPercent > 50 {
             alerting.insert("connections")
         }
-        if metrics.storageUsedPercent > 50 {
+        if metrics.storageUsedPercent >= 0 && metrics.storageUsedPercent > 50 {
             alerting.insert("storage")
         }
         
@@ -54,6 +62,14 @@ class AlertManager {
     }
     
     private func sendNotification(message: String) {
+        // Always log the alert to console
+        print("🚨 ALERT: \(message)")
+        
+        // Only try to send system notification if running as bundled app
+        guard notificationsAvailable else {
+            return
+        }
+        
         let content = UNMutableNotificationContent()
         content.title = "PulseBar - RDS Alert"
         content.body = message

@@ -8,12 +8,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var refreshTimer: Timer?
     
     func applicationDidFinishLaunching(_ notification: Notification) {
-        // Request notification permissions
-        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
-            if let error = error {
-                print("Notification permission error: \(error)")
-            }
-        }
+        // Request notification permissions (only works in bundled app)
+        requestNotificationPermissions()
         
         // Create status bar item
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -156,7 +152,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Color-code the main item
         if let metrics = metrics {
-            let maxValue = max(metrics.cpuUtilization, metrics.connectionsUsedPercent, metrics.storageUsedPercent)
+            // Filter out -1 (N/A) values when determining max
+            let validValues = [metrics.cpuUtilization, metrics.connectionsUsedPercent, metrics.storageUsedPercent]
+                .filter { $0 >= 0 }
+            let maxValue = validValues.max() ?? 0
+            
             if maxValue > 75 {
                 item.title = "🔴 " + item.title
             } else if maxValue > 50 {
@@ -171,6 +171,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     func createMetricMenuItem(label: String, value: Double, unit: String) -> NSMenuItem {
         let item = NSMenuItem()
+        
+        // Handle N/A case (value = -1)
+        if value < 0 {
+            item.title = "⚪ \(label): N/A"
+            item.isEnabled = false
+            return item
+        }
+        
         item.title = "\(label): \(String(format: "%.1f", value))\(unit)"
         item.isEnabled = false
         
@@ -220,5 +228,25 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc func quit() {
         NSApplication.shared.terminate(nil)
+    }
+    
+    private func requestNotificationPermissions() {
+        // Check if we're running as a proper app bundle
+        // UNUserNotificationCenter requires a valid bundle identifier
+        guard Bundle.main.bundleIdentifier != nil else {
+            print("⚠️ Running without app bundle - notifications disabled")
+            print("   To enable notifications, run: make install && open /Applications/PulseBar.app")
+            return
+        }
+        
+        UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
+            if let error = error {
+                print("Notification permission error: \(error)")
+            } else if granted {
+                print("✓ Notification permissions granted")
+            } else {
+                print("⚠️ Notification permissions denied")
+            }
+        }
     }
 }
