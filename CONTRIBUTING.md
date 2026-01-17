@@ -148,6 +148,7 @@ make clean
 swift run
 
 # Production (with notifications)
+# Note: First time may need: xattr -cr /Applications/PulseBar.app
 open /Applications/PulseBar.app
 ```
 

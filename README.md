@@ -264,6 +264,17 @@ See `.github/workflows/` for details.
 
 ## Troubleshooting
 
+### "App is damaged" or "Can't be opened"
+
+The app is unsigned, so macOS Gatekeeper blocks it. Fix with one of these:
+
+**Option 1:** Right-click the app → **Open** → Click **Open** in the dialog
+
+**Option 2:** Run in terminal:
+```bash
+xattr -cr /Applications/PulseBar.app
+```
+
 ### "No credentials found"
 
 Ensure `~/.aws/credentials` exists and has valid credentials for the selected profile.

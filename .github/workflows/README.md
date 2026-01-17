@@ -47,7 +47,15 @@ Automatically builds and attaches the app bundle to GitHub releases.
 - `PulseBar-vX.X.X-macOS.zip` - The app bundle
 - `PulseBar-vX.X.X-macOS.zip.sha256` - Checksum for verification
 
-**Note:** The app is not code-signed. Users will need to right-click → Open on first launch.
+**Note:** The app is not code-signed. Users will see "damaged" or "can't be opened" error.
+
+**Users must run one of these after download:**
+```bash
+# Option 1: Remove quarantine flag
+xattr -cr /Applications/PulseBar.app
+
+# Option 2: Right-click app → Open → Click "Open"
+```
 
 ---
 
