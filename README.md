@@ -58,6 +58,9 @@ For each RDS instance:
    unzip PulseBar-vX.X.X-macOS.zip
    mv PulseBar.app /Applications/
    ```
+4. **First launch** (app is unsigned, so macOS will block it):
+   - Right-click `PulseBar.app` → **Open** → Click **Open** in the dialog
+   - Or run: `xattr -cr /Applications/PulseBar.app`
 
 ### Option 2: Build from Source
 
