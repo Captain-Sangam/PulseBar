@@ -11,13 +11,38 @@ class RDSMonitoringService {
     var instances: [RDSInstance] = []
     var metricsCache: [String: RDSMetrics] = [:]
     var lastUpdateTime: Date?
+    var state: MonitoringState = .loading
     
     private var alertManager = AlertManager()
     
     func refresh() async {
+        state = .loading
+        
+        // Check if credentials file exists
+        guard AWSCredentialsReader.shared.credentialsFileExists() else {
+            state = .noCredentials
+            print("❌ AWS credentials file not found at ~/.aws/credentials")
+            return
+        }
+        
+        // Check if profile has valid credentials
+        guard AWSCredentialsReader.shared.hasCredentials(profile: currentProfile) else {
+            state = .invalidCredentials(message: "Profile '\(currentProfile)' not found or missing keys")
+            print("❌ No credentials found for profile: \(currentProfile)")
+            return
+        }
+        
         do {
             // Fetch RDS instances
             try await fetchRDSInstances()
+            
+            // Check if we found any instances
+            if instances.isEmpty {
+                state = .noDatabases
+                lastUpdateTime = Date()
+                print("ℹ️ No RDS instances found in \(currentRegion)")
+                return
+            }
             
             // Fetch metrics for each instance
             try await fetchMetrics()
@@ -25,9 +50,34 @@ class RDSMonitoringService {
             // Check for alerts
             checkAlerts()
             
+            state = .loaded
             lastUpdateTime = Date()
         } catch {
-            print("Error refreshing data: \(error)")
+            // Check for common AWS auth errors
+            let errorString = String(describing: error).lowercased()
+            let errorMessage = (error as NSError).localizedDescription.lowercased()
+            
+            // Check both the error description and the full error string for auth-related patterns
+            let isAuthError = [errorString, errorMessage].contains { msg in
+                msg.contains("security token") ||
+                msg.contains("expired") ||
+                msg.contains("invalid") ||
+                msg.contains("signature") ||
+                msg.contains("credentials") ||
+                msg.contains("access denied") ||
+                msg.contains("not authorized") ||
+                msg.contains("unknownawshttpserviceerror") ||  // Common auth failure
+                msg.contains("authfailure") ||
+                msg.contains("unauthorized")
+            }
+            
+            if isAuthError {
+                state = .invalidCredentials(message: "Credentials may be expired or invalid")
+                print("❌ AWS authentication error: \(error)")
+            } else {
+                state = .error(message: (error as NSError).localizedDescription)
+                print("❌ Error refreshing data: \(error)")
+            }
         }
     }
     

@@ -1,5 +1,26 @@
 import Foundation
 
+/// Represents the current state of the monitoring service
+enum MonitoringState: Equatable {
+    /// Initial state or currently fetching data
+    case loading
+    
+    /// Successfully loaded instances (may be empty)
+    case loaded
+    
+    /// AWS credentials file (~/.aws/credentials) not found
+    case noCredentials
+    
+    /// Credentials exist but are invalid, expired, or lack permissions
+    case invalidCredentials(message: String)
+    
+    /// Connected successfully but no RDS instances found in the selected region
+    case noDatabases
+    
+    /// A general error occurred
+    case error(message: String)
+}
+
 struct RDSInstance {
     let identifier: String
     let engine: String

@@ -158,6 +158,12 @@ region = us-east-1
 - 🔴 Red: > 75% (critical)
 - ⚪ Gray: N/A (data unavailable)
 
+**Status Messages:**
+- ⏳ Loading... - Fetching data from AWS
+- ⚠️ AWS credentials not found - Missing `~/.aws/credentials` file
+- 🔐 Invalid credentials - Credentials expired or invalid
+- 📭 No RDS instances found - No databases in the selected region
+
 ## Alert Behavior
 
 Notifications are sent when any metric exceeds 50%:
@@ -275,9 +281,28 @@ The app is unsigned, so macOS Gatekeeper blocks it. Fix with one of these:
 xattr -cr /Applications/PulseBar.app
 ```
 
-### "No credentials found"
+### "AWS credentials not found"
 
-Ensure `~/.aws/credentials` exists and has valid credentials for the selected profile.
+The app can't find `~/.aws/credentials`. Set up AWS credentials:
+
+```bash
+# Option 1: Use AWS CLI
+aws configure
+
+# Option 2: Create manually
+mkdir -p ~/.aws
+cat > ~/.aws/credentials << EOF
+[default]
+aws_access_key_id = YOUR_KEY
+aws_secret_access_key = YOUR_SECRET
+EOF
+```
+
+### "Invalid credentials" / "Profile not found"
+
+- Verify the selected profile exists in `~/.aws/credentials`
+- If using temporary credentials (SSO, assumed role), refresh them
+- Check credentials haven't expired
 
 ### "Permission denied"
 

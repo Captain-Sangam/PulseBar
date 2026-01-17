@@ -85,12 +85,64 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         menu.addItem(NSMenuItem.separator())
         
-        // RDS instances
-        if monitoringService.instances.isEmpty {
-            let item = NSMenuItem(title: "Loading...", action: nil, keyEquivalent: "")
+        // Display based on current state
+        switch monitoringService.state {
+        case .loading:
+            let item = NSMenuItem(title: "⏳ Loading...", action: nil, keyEquivalent: "")
             item.isEnabled = false
             menu.addItem(item)
-        } else {
+            
+        case .noCredentials:
+            let item = NSMenuItem(title: "⚠️ AWS credentials not found", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+            
+            let helpItem = NSMenuItem(title: "   Configure ~/.aws/credentials", action: nil, keyEquivalent: "")
+            helpItem.isEnabled = false
+            menu.addItem(helpItem)
+            
+            let docsItem = NSMenuItem(title: "📖 Open AWS CLI Docs", action: #selector(openAWSCredentialsDocs), keyEquivalent: "")
+            docsItem.target = self
+            menu.addItem(docsItem)
+            
+        case .invalidCredentials(let message):
+            let item = NSMenuItem(title: "🔐 Invalid credentials", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+            
+            // Wrap message across multiple lines
+            for line in wrapText(message, maxLength: 40) {
+                let lineItem = NSMenuItem(title: "   \(line)", action: nil, keyEquivalent: "")
+                lineItem.isEnabled = false
+                menu.addItem(lineItem)
+            }
+            
+            let hintItem = NSMenuItem(title: "   Check profile or refresh token", action: nil, keyEquivalent: "")
+            hintItem.isEnabled = false
+            menu.addItem(hintItem)
+            
+        case .noDatabases:
+            let item = NSMenuItem(title: "📭 No RDS instances found", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+            
+            let hintItem = NSMenuItem(title: "   in \(monitoringService.currentRegion)", action: nil, keyEquivalent: "")
+            hintItem.isEnabled = false
+            menu.addItem(hintItem)
+            
+        case .error(let message):
+            let item = NSMenuItem(title: "❌ Error occurred", action: nil, keyEquivalent: "")
+            item.isEnabled = false
+            menu.addItem(item)
+            
+            // Wrap message across multiple lines
+            for line in wrapText(message, maxLength: 40) {
+                let lineItem = NSMenuItem(title: "   \(line)", action: nil, keyEquivalent: "")
+                lineItem.isEnabled = false
+                menu.addItem(lineItem)
+            }
+            
+        case .loaded:
             for instance in monitoringService.instances {
                 let metrics = monitoringService.getMetrics(for: instance.identifier)
                 let menuItem = createInstanceMenuItem(instance: instance, metrics: metrics)
@@ -237,6 +289,36 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     @objc func quit() {
         NSApplication.shared.terminate(nil)
+    }
+    
+    @objc func openAWSCredentialsDocs() {
+        if let url = URL(string: "https://docs.aws.amazon.com/cli/latest/userguide/cli-configure-files.html") {
+            NSWorkspace.shared.open(url)
+        }
+    }
+    
+    /// Wraps text into multiple lines, breaking at word boundaries
+    private func wrapText(_ text: String, maxLength: Int) -> [String] {
+        let words = text.split(separator: " ")
+        var lines: [String] = []
+        var currentLine = ""
+        
+        for word in words {
+            if currentLine.isEmpty {
+                currentLine = String(word)
+            } else if currentLine.count + 1 + word.count <= maxLength {
+                currentLine += " " + word
+            } else {
+                lines.append(currentLine)
+                currentLine = String(word)
+            }
+        }
+        
+        if !currentLine.isEmpty {
+            lines.append(currentLine)
+        }
+        
+        return lines.isEmpty ? [text] : lines
     }
     
     private func requestNotificationPermissions() {

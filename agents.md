@@ -301,20 +301,26 @@ credentialsProvider: ...                 // Wrong parameter name
 ```
 ┌─────────────────────────────────────────────────────────────┐
 │ Timer (15 min) / Manual Refresh                             │
+│ state = .loading                                            │
 └────────────────────┬────────────────────────────────────────┘
                      ↓
 ┌─────────────────────────────────────────────────────────────┐
 │ AWSCredentialsReader                                        │
-│ - Read ~/.aws/credentials                                   │
-│ - Read ~/.aws/config                                        │
+│ - Check if ~/.aws/credentials exists                        │
+│   → If not: state = .noCredentials, STOP                    │
+│ - Check if profile has credentials                          │
+│   → If not: state = .invalidCredentials, STOP               │
 │ - Load profile + region                                     │
 └────────────────────┬────────────────────────────────────────┘
                      ↓
 ┌─────────────────────────────────────────────────────────────┐
 │ RDSMonitoringService.fetchRDSInstances()                    │
 │ - Call DescribeDBInstances                                  │
+│   → If auth error: state = .invalidCredentials, STOP        │
+│   → If other error: state = .error, STOP                    │
 │ - Parse instance metadata                                   │
 │ - Store in instances array                                  │
+│   → If empty: state = .noDatabases, STOP                    │
 └────────────────────┬────────────────────────────────────────┘
                      ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -335,6 +341,7 @@ credentialsProvider: ...                 // Wrong parameter name
 │   - Evaluate thresholds (>50%, ignoring -1)                 │
 │   - If breached → AlertManager.sendAlert()                  │
 │   - If recovered → AlertManager.clearAlert()                │
+│ state = .loaded                                             │
 └────────────────────┬────────────────────────────────────────┘
                      ↓
 ┌─────────────────────────────────────────────────────────────┐
@@ -348,7 +355,13 @@ credentialsProvider: ...                 // Wrong parameter name
                      ↓
 ┌─────────────────────────────────────────────────────────────┐
 │ AppDelegate.updateMenu()                                    │
-│ - Rebuild menu with latest data                             │
+│ - Switch on monitoringService.state:                        │
+│   - .loading → Show "Loading..."                            │
+│   - .noCredentials → Show setup instructions + docs link    │
+│   - .invalidCredentials → Show error + hints                │
+│   - .noDatabases → Show "No RDS instances" + region         │
+│   - .error → Show error message                             │
+│   - .loaded → Show instances with metrics                   │
 │ - Apply color coding (filter -1 for max calculation)        │
 │ - Update "Last updated" timestamp                           │
 └─────────────────────────────────────────────────────────────┘
@@ -406,19 +419,21 @@ PulseBar/
 - **Purpose**: Menu bar UI coordinator
 - **Responsibilities**:
   - Create and manage NSStatusItem (menu bar icon)
-  - Build and update NSMenu
+  - Build and update NSMenu based on `MonitoringState`
   - Handle user interactions (profile/region selection, refresh)
   - Coordinate RDSMonitoringService
   - Manage 15-minute refresh timer
   - Request notification permissions (gracefully handles non-bundle)
+  - Display appropriate UI for each state (loading, errors, no databases, etc.)
 - **Key Methods**:
   - `applicationDidFinishLaunching()` - Setup
-  - `updateMenu()` - Rebuild menu with current data
+  - `updateMenu()` - Rebuild menu based on current state
   - `createInstanceMenuItem()` - Format instance data for display
   - `createMetricMenuItem()` - Format individual metric with color
   - `refreshData()` - Trigger data refresh
   - `startAutoRefresh()` - Setup 900s timer
   - `requestNotificationPermissions()` - Safe notification setup
+  - `openAWSCredentialsDocs()` - Open AWS CLI docs in browser
 
 #### AWSCredentialsReader.swift
 - **Purpose**: Parse AWS configuration files
@@ -430,6 +445,8 @@ PulseBar/
   - `listProfiles()` - Enumerate all available profiles
   - `getCredentials(profile:)` - Get credentials for specific profile
   - `getRegion(profile:)` - Get default region for profile
+  - `credentialsFileExists()` - Check if ~/.aws/credentials exists
+  - `hasCredentials(profile:)` - Check if a profile has valid credentials
 - **Pattern**: Singleton (`shared` instance)
 
 #### RDSMonitoringService.swift
@@ -457,6 +474,7 @@ PulseBar/
   - `instances: [RDSInstance]` - Current RDS instances
   - `metricsCache: [String: RDSMetrics]` - Latest metrics by instance ID
   - `lastUpdateTime: Date?` - Timestamp of last successful refresh
+  - `state: MonitoringState` - Current state (loading, loaded, error states)
 
 #### AlertManager.swift
 - **Purpose**: Notification management with deduplication
@@ -477,7 +495,9 @@ PulseBar/
   - `notificationsAvailable: Bool` - True if Bundle.main.bundleIdentifier != nil
 
 #### Models.swift
-- **Purpose**: Data structures
+- **Purpose**: Data structures and state management
+- **Enums**:
+  - `MonitoringState` - Current state of the monitoring service
 - **Structures**:
   - `RDSInstance` - RDS instance metadata
   - `RDSMetrics` - Collected and calculated metrics
@@ -485,6 +505,18 @@ PulseBar/
 - **Methods**:
   - `RDSMetrics.hasAlert()` - Check if any threshold breached (ignores -1)
   - `RDSMetrics.getAlertMessage()` - Format notification message (ignores -1)
+
+##### MonitoringState Enum
+```swift
+enum MonitoringState: Equatable {
+    case loading                          // Initial state or fetching data
+    case loaded                           // Successfully loaded instances
+    case noCredentials                    // ~/.aws/credentials not found
+    case invalidCredentials(message: String)  // Auth failed or expired
+    case noDatabases                      // No RDS instances in region
+    case error(message: String)           // General error
+}
+```
 
 ---
 
@@ -551,6 +583,30 @@ if value < 0 {
 
 // In alert logic, filter out -1
 let validValues = [cpu, connections, storage].filter { $0 >= 0 }
+```
+
+#### State-Based UI Updates
+```swift
+// Pattern: Switch on MonitoringState to render appropriate UI
+switch monitoringService.state {
+case .loading:
+    // Show loading indicator
+    
+case .noCredentials:
+    // Show setup instructions and link to AWS docs
+    
+case .invalidCredentials(let message):
+    // Show error and suggest checking profile or refreshing token
+    
+case .noDatabases:
+    // Show "No RDS instances found in {region}"
+    
+case .error(let message):
+    // Show generic error with truncated message
+    
+case .loaded:
+    // Render instance list with metrics
+}
 ```
 
 ### AWS SDK Patterns
@@ -679,9 +735,11 @@ private func sendNotification(message: String) {
 
 ### Testing Checklist
 
-1. **Credentials**:
+1. **Credentials & States**:
    - [ ] App loads with valid credentials
-   - [ ] App handles missing credentials gracefully
+   - [ ] Shows "AWS credentials not found" when ~/.aws/credentials missing
+   - [ ] Shows "Invalid credentials" when credentials are expired/invalid
+   - [ ] Shows "No RDS instances found" for empty regions
    - [ ] Profile switching works
    - [ ] Region switching works
 
@@ -802,6 +860,6 @@ First build downloads ~200MB of AWS SDK. Subsequent builds are fast.
 
 ---
 
-**Last Updated**: 2026-01-17  
-**Version**: 1.0.0  
+**Last Updated**: 2026-01-18  
+**Version**: 1.1.0  
 **Maintainer**: PulseBar Development Team
