@@ -2,14 +2,11 @@ name: PR Validation
 
 on:
   pull_request:
-    types:
-      - closed
     branches: [main]
 
 jobs:
   validate:
     name: Build and Validate
-    if: github.event.pull_request.merged == true
     runs-on: macos-latest
 
     steps:
