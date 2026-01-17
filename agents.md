@@ -373,6 +373,10 @@ PulseBar/
 ├── LICENSE                       # MIT License
 ├── agents.md                     # This file
 ├── .gitignore                    # Git ignore rules
+├── Assets/
+│   └── screenshot.png            # App screenshot for README
+├── icons/
+│   └── *.png                     # App icons (16px to 1024px)
 ├── .github/
 │   ├── PULL_REQUEST_TEMPLATE.md  # PR template
 │   └── workflows/

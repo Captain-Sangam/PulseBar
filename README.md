@@ -1,10 +1,22 @@
-# PulseBar - RDS Monitor
+<p align="center">
+  <img src="icons/128-mac.png" alt="PulseBar Icon" width="128" height="128">
+</p>
 
-A macOS menu bar app for monitoring AWS RDS instances with real-time health metrics and alerts.
+<h1 align="center">PulseBar - RDS Monitor</h1>
 
-![macOS](https://img.shields.io/badge/macOS-13.0+-blue)
-![Swift](https://img.shields.io/badge/Swift-5.9+-orange)
-![License](https://img.shields.io/badge/License-MIT-green)
+<p align="center">
+  A macOS menu bar app for monitoring AWS RDS instances with real-time health metrics and alerts.
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/macOS-13.0+-blue" alt="macOS">
+  <img src="https://img.shields.io/badge/Swift-5.9+-orange" alt="Swift">
+  <img src="https://img.shields.io/badge/License-MIT-green" alt="License">
+</p>
+
+<p align="center">
+  <img src="Assets/screenshot.png" alt="PulseBar Screenshot" width="400">
+</p>
 
 ## Features
 
@@ -195,6 +207,10 @@ PulseBar/
 │   ├── RDSMonitoringService.swift    # AWS SDK integration
 │   ├── AlertManager.swift            # Notification logic
 │   └── Models.swift                  # Data structures
+├── Assets/
+│   └── screenshot.png                # App screenshot
+├── icons/
+│   └── *.png                         # App icons (16-1024px)
 ├── .github/
 │   ├── PULL_REQUEST_TEMPLATE.md      # PR template
 │   └── workflows/

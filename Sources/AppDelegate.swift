@@ -12,9 +12,18 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         requestNotificationPermissions()
         
         // Create status bar item
-        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+        statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
-            button.title = "📊"
+            // Try to load icon from bundle resources
+            if let iconPath = Bundle.main.path(forResource: "MenuBarIcon", ofType: "png"),
+               let icon = NSImage(contentsOfFile: iconPath) {
+                icon.isTemplate = true  // Adapts to light/dark mode
+                icon.size = NSSize(width: 18, height: 18)
+                button.image = icon
+            } else {
+                // Fallback to emoji when running outside bundle (swift run)
+                button.title = "📊"
+            }
             button.action = #selector(toggleMenu)
             button.target = self
         }
