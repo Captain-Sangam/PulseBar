@@ -9,7 +9,7 @@ on:
 jobs:
   validate:
     name: Build and Validate
-    runs-on: macos-13
+    runs-on: macos-latest
     
     steps:
     - name: Checkout code
@@ -69,5 +69,5 @@ jobs:
         echo "✅ PR validation passed" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "- Swift version: $(swift --version | head -n 1)" >> $GITHUB_STEP_SUMMARY
-        echo "- Platform: macOS 13+" >> $GITHUB_STEP_SUMMARY
+        echo "- Platform: macOS 15 (Apple Silicon)" >> $GITHUB_STEP_SUMMARY
         echo "- Configuration: Debug + Release builds validated" >> $GITHUB_STEP_SUMMARY

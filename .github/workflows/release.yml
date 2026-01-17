@@ -7,7 +7,7 @@ on:
 jobs:
   build-and-upload:
     name: Build and Upload Release Asset
-    runs-on: macos-13
+    runs-on: macos-latest
     
     permissions:
       contents: write
@@ -50,6 +50,11 @@ jobs:
         
         # Copy Info.plist
         cp Info.plist build/PulseBar.app/Contents/
+        
+        # Copy icons
+        cp icons/16-mac.png build/PulseBar.app/Contents/Resources/MenuBarIcon.png
+        cp icons/32-mac.png build/PulseBar.app/Contents/Resources/MenuBarIcon@2x.png
+        cp icons/128-mac.png build/PulseBar.app/Contents/Resources/AppIcon.png
         
         # Set version in Info.plist
         VERSION="${{ github.event.release.tag_name }}"
@@ -106,7 +111,7 @@ jobs:
         echo "### Build Details" >> $GITHUB_STEP_SUMMARY
         echo "- Version: ${{ github.event.release.tag_name }}" >> $GITHUB_STEP_SUMMARY
         echo "- Swift version: $(swift --version | head -n 1)" >> $GITHUB_STEP_SUMMARY
-        echo "- Platform: macOS 13+" >> $GITHUB_STEP_SUMMARY
+        echo "- Platform: macOS 15 (Apple Silicon)" >> $GITHUB_STEP_SUMMARY
         echo "- Architecture: $(uname -m)" >> $GITHUB_STEP_SUMMARY
         echo "" >> $GITHUB_STEP_SUMMARY
         echo "### Artifacts" >> $GITHUB_STEP_SUMMARY

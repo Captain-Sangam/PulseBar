@@ -26,14 +26,14 @@ Validates code quality and buildability before merging.
 10. ✅ Generate build summary
 
 **Requirements:**
-- Runs on macOS 13 runner
+- Runs on macOS 15 (Apple Silicon) runner
 - No secrets required
 
 **Example Output:**
 ```
 ✅ PR validation passed
 - Swift version: Swift 5.9
-- Platform: macOS 13+
+- Platform: macOS 15 (Apple Silicon)
 - Configuration: Debug + Release builds validated
 ```
 
@@ -61,7 +61,7 @@ Automatically builds and attaches the app bundle to GitHub releases.
 11. ✅ Upload artifacts to release
 
 **Requirements:**
-- Runs on macOS 13 runner
+- Runs on macOS 15 (Apple Silicon) runner
 - Requires `contents: write` permission
 - Uses `GITHUB_TOKEN` (automatically provided)
 
@@ -76,7 +76,7 @@ Automatically builds and attaches the app bundle to GitHub releases.
 ### Build Details
 - Version: v1.0.0
 - Swift version: Swift 5.9
-- Platform: macOS 13+
+- Platform: macOS 15 (Apple Silicon)
 - Architecture: arm64
 
 ### Artifacts
@@ -234,10 +234,10 @@ Replace zip creation with:
 
 ### Runner Images
 
-- `macos-13` - macOS 13 Ventura
-  - Includes Xcode 15+
+- `macos-latest` - macOS 15 (Apple Silicon)
+  - Includes Xcode 16+
   - Swift 5.9+ support
-  - Native Apple Silicon support
+  - Native Apple Silicon (arm64)
 
 ---
 
