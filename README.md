@@ -1,5 +1,5 @@
 <p align="center">
-  <img src="icons/128-mac.png" alt="PulseBar Icon" width="128" height="128">
+  <img src="Icons/128-mac.png" alt="PulseBar Icon" width="128" height="128">
 </p>
 
 <h1 align="center">PulseBar - RDS Monitor</h1>
