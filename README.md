@@ -51,17 +51,7 @@ For each RDS instance:
 
 ### Option 1: Download Pre-built Release
 
-1. Go to the [Releases page](../../releases)
-2. Download the latest `PulseBar-vX.X.X-macOS.zip`
-3. Verify checksum (optional):
-   ```bash
-   shasum -a 256 -c PulseBar-vX.X.X-macOS.zip.sha256
-   ```
-4. Unzip and move to Applications:
-   ```bash
-   unzip PulseBar-vX.X.X-macOS.zip
-   mv PulseBar.app /Applications/
-   ```
+Check the [Releases page](../../releases) for pre-built binaries (if available), or build from source below.
 
 ### Option 2: Build from Source
 
@@ -214,9 +204,7 @@ PulseBar/
 ├── .github/
 │   ├── PULL_REQUEST_TEMPLATE.md      # PR template
 │   └── workflows/
-│       ├── pr-validation.yml         # PR build checks
-│       ├── release.yml               # Auto-build on release
-│       └── README.md                 # Workflow documentation
+│       └── pr-validation.yml         # PR build checks
 ├── Package.swift                     # Swift Package Manager config
 ├── Info.plist                        # App metadata
 ├── Makefile                          # Build commands
@@ -248,12 +236,11 @@ Dependencies are managed via Swift Package Manager and will be automatically res
 
 ## CI/CD
 
-This project includes GitHub Actions for:
+This project uses GitHub Actions for continuous integration:
 
-- **PR Validation**: Builds and validates code on every pull request
-- **Release Build**: Automatically builds and attaches binaries to GitHub releases
+- **PR Validation**: Automatically builds and validates code on every pull request to `main`
 
-See `.github/workflows/` for details.
+See `.github/workflows/pr-validation.yml` for details.
 
 ## Limitations (v1)
 

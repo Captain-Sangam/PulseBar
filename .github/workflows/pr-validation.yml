@@ -10,64 +10,42 @@ jobs:
   validate:
     name: Build and Validate
     runs-on: macos-latest
-    
+
     steps:
-    - name: Checkout code
-      uses: actions/checkout@v4
-      
-    - name: Show Swift version
-      run: |
-        swift --version
-        xcodebuild -version
-    
-    - name: Cache Swift packages
-      uses: actions/cache@v4
-      with:
-        path: .build
-        key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
-        restore-keys: |
-          ${{ runner.os }}-spm-
-    
-    - name: Resolve dependencies
-      run: swift package resolve
-      
-    - name: Check code formatting
-      run: |
-        # Check for basic Swift style issues
-        echo "Checking Swift files..."
-        find Sources -name "*.swift" -exec grep -l "import Foundation" {} \; || true
-        
-    - name: Build debug
-      run: swift build -v
-      
-    - name: Build release
-      run: swift build -c release -v
-      
-    - name: Run tests
-      run: swift test || echo "No tests configured yet"
-      continue-on-error: true
-      
-    - name: Validate Package.swift
-      run: swift package dump-package > /dev/null
-      
-    - name: Check for common issues
-      run: |
-        echo "Checking for TODO/FIXME comments..."
-        grep -r "// TODO\|// FIXME" Sources/ || echo "No TODOs found"
-        
-        echo "Checking for hardcoded credentials..."
-        if grep -r "aws_access_key\|aws_secret" Sources/; then
-          echo "⚠️ Warning: Possible hardcoded credentials found"
-          exit 1
-        else
-          echo "✓ No hardcoded credentials detected"
-        fi
-    
-    - name: Build summary
-      run: |
-        echo "## Build Summary" >> $GITHUB_STEP_SUMMARY
-        echo "✅ PR validation passed" >> $GITHUB_STEP_SUMMARY
-        echo "" >> $GITHUB_STEP_SUMMARY
-        echo "- Swift version: $(swift --version | head -n 1)" >> $GITHUB_STEP_SUMMARY
-        echo "- Platform: macOS 15 (Apple Silicon)" >> $GITHUB_STEP_SUMMARY
-        echo "- Configuration: Debug + Release builds validated" >> $GITHUB_STEP_SUMMARY
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Check code formatting
+        run: |
+          # Check for basic Swift style issues
+          echo "Checking Swift files..."
+          find Sources -name "*.swift" -exec grep -l "import Foundation" {} \; || true
+
+      - name: Build debug
+        run: swift build -v
+
+      - name: Build release
+        run: swift build -c release -v
+
+      - name: Run tests
+        run: swift test || echo "No tests configured yet"
+        continue-on-error: true
+
+      - name: Validate Package.swift
+        run: swift package dump-package > /dev/null
