@@ -6,7 +6,7 @@ on:
 
 jobs:
   build-and-upload:
-    name: Build, Sign, Notarize and Upload
+    name: Build and Upload Release Asset
     runs-on: macos-latest
 
     permissions:
@@ -62,97 +62,20 @@ jobs:
 
           echo "✓ App bundle created successfully"
 
-      - name: Import signing certificate
-        env:
-          CERTIFICATE_BASE64: ${{ secrets.APPLE_CERTIFICATE_BASE64 }}
-          CERTIFICATE_PASSWORD: ${{ secrets.APPLE_CERTIFICATE_PASSWORD }}
+      - name: Verify app bundle
         run: |
-          # Create temporary keychain
-          KEYCHAIN_PATH=$RUNNER_TEMP/signing.keychain-db
-          KEYCHAIN_PASSWORD=$(openssl rand -base64 32)
-
-          # Create keychain
-          security create-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN_PATH"
-          security unlock-keychain -p "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          # Import certificate
-          echo "$CERTIFICATE_BASE64" | base64 --decode > $RUNNER_TEMP/certificate.p12
-          security import $RUNNER_TEMP/certificate.p12 \
-            -P "$CERTIFICATE_PASSWORD" \
-            -A \
-            -t cert \
-            -f pkcs12 \
-            -k "$KEYCHAIN_PATH"
-
-          # Set keychain as default
-          security list-keychain -d user -s "$KEYCHAIN_PATH"
-
-          # Allow codesign to access the keychain
-          security set-key-partition-list -S apple-tool:,apple:,codesign: -s -k "$KEYCHAIN_PASSWORD" "$KEYCHAIN_PATH"
-
-          echo "✓ Certificate imported successfully"
-
-      - name: Sign app bundle
-        env:
-          SIGNING_IDENTITY: ${{ secrets.APPLE_SIGNING_IDENTITY }}
-        run: |
-          echo "Signing app bundle..."
-
-          # Sign the app with hardened runtime
-          codesign --force --deep --options runtime \
-            --sign "$SIGNING_IDENTITY" \
-            --timestamp \
-            build/PulseBar.app
-
-          # Verify signature
-          codesign --verify --verbose=4 build/PulseBar.app
-          echo "✓ App signed successfully"
-
-      - name: Notarize app
-        env:
-          APPLE_ID: ${{ secrets.APPLE_ID }}
-          APPLE_APP_PASSWORD: ${{ secrets.APPLE_APP_PASSWORD }}
-          APPLE_TEAM_ID: ${{ secrets.APPLE_TEAM_ID }}
-        run: |
-          echo "Creating ZIP for notarization..."
-          cd build
-          zip -r PulseBar-notarize.zip PulseBar.app
-          cd ..
-
-          echo "Submitting to Apple notary service..."
-          xcrun notarytool submit build/PulseBar-notarize.zip \
-            --apple-id "$APPLE_ID" \
-            --password "$APPLE_APP_PASSWORD" \
-            --team-id "$APPLE_TEAM_ID" \
-            --wait
-
-          echo "✓ Notarization complete"
-
-      - name: Staple notarization ticket
-        run: |
-          echo "Stapling notarization ticket..."
-          xcrun stapler staple build/PulseBar.app
-
-          # Verify stapling
-          xcrun stapler validate build/PulseBar.app
-          echo "✓ Notarization ticket stapled"
+          echo "Verifying app bundle..."
+          ls -lah build/PulseBar.app/Contents/MacOS/
+          ls -lah build/PulseBar.app/Contents/Resources/
+          file build/PulseBar.app/Contents/MacOS/PulseBar
 
       - name: Create distributable archive
         run: |
           cd build
-          rm -f PulseBar-notarize.zip  # Remove temp notarization zip
           zip -r PulseBar.zip PulseBar.app
           shasum -a 256 PulseBar.zip > PulseBar.zip.sha256
           cd ..
           echo "✓ Archive created: PulseBar.zip"
-
-      - name: Verify final app
-        run: |
-          echo "Final verification..."
-          codesign -dv --verbose=4 build/PulseBar.app
-          spctl --assess --type execute --verbose=2 build/PulseBar.app || true
-          echo "✓ Verification complete"
 
       - name: Upload app bundle to release
         uses: actions/upload-release-asset@v1
@@ -173,8 +96,3 @@ jobs:
           asset_path: ./build/PulseBar.zip.sha256
           asset_name: PulseBar-${{ github.event.release.tag_name }}-macOS.zip.sha256
           asset_content_type: text/plain
-
-      - name: Cleanup keychain
-        if: always()
-        run: |
-          security delete-keychain $RUNNER_TEMP/signing.keychain-db || true

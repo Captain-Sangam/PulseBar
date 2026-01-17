@@ -47,14 +47,16 @@ Automatically builds and attaches the app bundle to GitHub releases.
 - `PulseBar-vX.X.X-macOS.zip` - The app bundle
 - `PulseBar-vX.X.X-macOS.zip.sha256` - Checksum for verification
 
+**Note:** The app is not code-signed. Users will need to right-click → Open on first launch.
+
 ---
 
 ## Requirements
 
 Both workflows:
-- Run on `macos-latest` runner (macOS 15, Apple Silicon)
-- Use Xcode's built-in Swift (no separate Swift installation)
-- Release workflow requires `contents: write` permission
+- Run on `macos-latest` runner
+- Use Xcode's built-in Swift
+- No secrets required (uses automatic `GITHUB_TOKEN`)
 
 ---
 
