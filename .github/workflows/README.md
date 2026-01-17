@@ -20,30 +20,62 @@ Validates code quality and buildability before merging.
 8. Run tests (if available)
 9. Validate Package.swift
 
-**Requirements:**
-- Runs on `macos-latest` runner
-- Uses Xcode's built-in Swift
-- No secrets required
+---
+
+## Build and Release (`release.yml`)
+
+**Triggers:**
+- GitHub release published
+
+**Purpose:**
+Automatically builds and attaches the app bundle to GitHub releases.
+
+**Steps:**
+1. Checkout code at release tag
+2. Show Swift/Xcode versions
+3. Cache dependencies
+4. Resolve dependencies
+5. Build release binary
+6. Create `.app` bundle with icons
+7. Update version in Info.plist
+8. Verify app bundle
+9. Create ZIP archive
+10. Generate SHA256 checksum
+11. Upload artifacts to release
+
+**Artifacts Produced:**
+- `PulseBar-vX.X.X-macOS.zip` - The app bundle
+- `PulseBar-vX.X.X-macOS.zip.sha256` - Checksum for verification
+
+---
+
+## Requirements
+
+Both workflows:
+- Run on `macos-latest` runner (macOS 15, Apple Silicon)
+- Use Xcode's built-in Swift (no separate Swift installation)
+- Release workflow requires `contents: write` permission
+
+---
+
+## Creating a Release
+
+1. Go to **Releases** → **Draft a new release**
+2. Create a tag (e.g., `v1.0.0`)
+3. Fill in release notes
+4. Click **Publish release**
+
+The release workflow will automatically build and attach the app bundle.
+
+---
 
 ## Local Testing
-
-Before pushing, test locally:
 
 ```bash
 # Same as PR workflow
 swift build -v
 swift build -c release -v
-swift test || echo "No tests"
+
+# Same as release workflow
+make install
 ```
-
-## Troubleshooting
-
-### Build Failures
-
-**Issue:** Dependencies fail to resolve
-- Check `Package.swift` for correct AWS SDK version
-- Run `swift package resolve` locally first
-
-**Issue:** Swift version mismatch
-- The workflow uses Xcode's built-in Swift
-- Ensure code is compatible with Swift 5.9+

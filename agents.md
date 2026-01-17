@@ -380,7 +380,8 @@ PulseBar/
 ├── .github/
 │   ├── PULL_REQUEST_TEMPLATE.md  # PR template
 │   └── workflows/
-│       └── pr-validation.yml     # CI for pull requests
+│       ├── pr-validation.yml     # CI for pull requests
+│       └── release.yml           # Build on release
 ├── build/                        # Built app bundle (gitignored)
 │   └── PulseBar.app/
 └── Sources/
@@ -725,12 +726,17 @@ make clean           # Remove build artifacts
 
 ### CI/CD
 
-GitHub Actions workflow in `.github/workflows/`:
+GitHub Actions workflows in `.github/workflows/`:
 
 - **pr-validation.yml**: Runs on PRs and pushes to `main`
   - Builds debug and release configurations
   - Validates Package.swift
   - Runs tests (if available)
+
+- **release.yml**: Runs when a GitHub release is published
+  - Builds release binary
+  - Creates .app bundle with icons
+  - Uploads ZIP and checksum to release
 
 ### Known Limitations
 
