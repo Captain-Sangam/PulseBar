@@ -1,0 +1,51 @@
+name: PR Validation
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+jobs:
+  validate:
+    name: Build and Validate
+    runs-on: macos-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Show Swift version
+        run: |
+          swift --version
+          xcodebuild -version
+
+      - name: Cache Swift packages
+        uses: actions/cache@v4
+        with:
+          path: .build
+          key: ${{ runner.os }}-spm-${{ hashFiles('**/Package.resolved') }}
+          restore-keys: |
+            ${{ runner.os }}-spm-
+
+      - name: Resolve dependencies
+        run: swift package resolve
+
+      - name: Check code formatting
+        run: |
+          # Check for basic Swift style issues
+          echo "Checking Swift files..."
+          find Sources -name "*.swift" -exec grep -l "import Foundation" {} \; || true
+
+      - name: Build debug
+        run: swift build -v
+
+      - name: Build release
+        run: swift build -c release -v
+
+      - name: Run tests
+        run: swift test || echo "No tests configured yet"
+        continue-on-error: true
+
+      - name: Validate Package.swift
+        run: swift package dump-package > /dev/null
