@@ -12,6 +12,16 @@ class AWSCredentialsReader {
         configPath = "\(homeDir)/.aws/config"
     }
     
+    /// Check if AWS credentials file exists
+    func credentialsFileExists() -> Bool {
+        return FileManager.default.fileExists(atPath: credentialsPath)
+    }
+    
+    /// Check if a specific profile has credentials configured
+    func hasCredentials(profile: String = "default") -> Bool {
+        return getCredentials(profile: profile) != nil
+    }
+    
     struct AWSCredentials {
         let accessKeyId: String
         let secretAccessKey: String
