@@ -2,6 +2,8 @@
 
 This document provides comprehensive context for AI agents and developers working on the PulseBar codebase.
 
+---
+
 ## Table of Contents
 
 - [Product Overview](#product-overview)
@@ -38,6 +40,7 @@ This document provides comprehensive context for AI agents and developers workin
 - **MUST** support multiple AWS profiles
 - **MUST** support region selection
 - **MUST NOT** store or persist credentials (read-only access to AWS files)
+- **MUST** support session tokens for temporary credentials
 
 #### Supported Configurations
 ```ini
@@ -45,7 +48,7 @@ This document provides comprehensive context for AI agents and developers workin
 [default]
 aws_access_key_id = ...
 aws_secret_access_key = ...
-aws_session_token = ...  # Optional
+aws_session_token = ...  # Optional (for temporary credentials)
 
 [profile-name]
 aws_access_key_id = ...
@@ -53,10 +56,10 @@ aws_secret_access_key = ...
 
 # ~/.aws/config
 [default]
-region = us-east-1
+region = us-west-2
 
 [profile profile-name]
-region = us-west-2
+region = us-east-1
 ```
 
 ### 2. RDS Discovery
@@ -67,12 +70,12 @@ region = us-west-2
   - Database identifier (DBInstanceIdentifier)
   - Engine type (MySQL, PostgreSQL, etc.)
   - Instance class (db.t3.micro, db.r5.large, etc.)
-  - Allocated storage (GB)
+  - Allocated storage (GiB)
   - Instance status
-  - Parameter group (for max_connections lookup)
+  - Parameter group (for max_connections lookup - future)
 
 #### Refresh Behavior
-- Auto-refresh every 15 minutes
+- Auto-refresh every 15 minutes (900 seconds)
 - Manual refresh via menu button
 - In-memory cache only (no persistence)
 
@@ -80,24 +83,29 @@ region = us-west-2
 
 #### CloudWatch Metrics (per instance)
 
-| Metric | CloudWatch Name | Statistic | Period | Usage |
+| Metric | CloudWatch Name | Statistic | Period | Notes |
 |--------|----------------|-----------|--------|-------|
 | CPU % | `CPUUtilization` | Average | 300s | Direct display |
 | Connections | `DatabaseConnections` | Average | 300s | Activity + % calculation |
-| Free Storage | `FreeStorageSpace` | Average | 300s | Storage % calculation |
+| Free Storage | `FreeStorageSpace` | Average | **3600s** | Needs longer period for reliable data |
+
+**Important**: Storage metric uses a 1-hour period because CloudWatch may not report FreeStorageSpace every 5 minutes for all instances.
 
 #### Derived Metrics
 
 | Metric | Formula | Description |
 |--------|---------|-------------|
 | Connections Used % | `(DatabaseConnections / max_connections) × 100` | Percentage of connection pool used |
-| Storage Used % | `((AllocatedStorage - FreeStorageSpace) / AllocatedStorage) × 100` | Percentage of disk space used |
+| Storage Used % | `((AllocatedStorage × 1024³) - FreeStorageSpace) / (AllocatedStorage × 1024³) × 100` | Percentage of disk space used |
 
-#### Batch Operations
-- Use `GetMetricData` API for efficient batch querying
-- Query all metrics for an instance in a single API call
-- Time window: Last 15 minutes
-- Max datapoints: 1 (most recent value)
+**Notes:**
+- `AllocatedStorage` is in GiB, `FreeStorageSpace` is in bytes
+- Storage shows `-1` (displayed as "N/A") when CloudWatch returns no data
+
+#### Time Window
+- Queries CloudWatch for the **last 1 hour** of data (not 15 minutes)
+- This ensures reliable data retrieval even for less frequently reported metrics
+- Uses the most recent (first) value from the response
 
 ### 4. Alerting System
 
@@ -107,6 +115,8 @@ Trigger notification if **ANY** of these conditions are met:
 - Connections Used % > 50%
 - Storage Used % > 50%
 - Activity (raw connections) > 50% of max_connections
+
+**Exception**: -1 (N/A) values are ignored in alert calculations.
 
 #### Notification Format
 ```
@@ -128,24 +138,30 @@ Storage: {value}%
   - More than 15 minutes since last alert for same condition
 - Clear alert state when all metrics return below 50%
 
+#### Notification Requirements
+- **Only works when running as app bundle** (via `make install`)
+- Running via `swift run` disables notifications (no bundle identifier)
+- Alerts are always logged to console regardless of bundle status
+
 ### 5. User Interface
 
 #### Menu Bar Integration
-- App lives in macOS menu bar (no dock icon)
-- Icon: 📊 (database/chart emoji)
+- App lives in macOS menu bar (no dock icon) - `LSUIElement = true`
+- Icon: 📊 (chart emoji)
 - Click icon to show dropdown menu
 
 #### Menu Structure
 ```
 Profile: {current-profile} >
-  - default
-  - production
-  - staging
+  ✓ default
+    production
+    staging
 Region: {current-region} >
-  - us-east-1
-  - us-west-2
-  - eu-west-1
-  - ...
+    us-east-1
+  ✓ us-west-2
+    eu-west-1
+    ap-southeast-1
+    ap-northeast-1
 ─────────────────────
 🔄 Refresh Now (⌘R)
 ─────────────────────
@@ -167,6 +183,7 @@ Quit (⌘Q)
 - 🟢 **Green**: Value < 50% (healthy)
 - 🟡 **Yellow**: Value 50-75% (warning)
 - 🔴 **Red**: Value > 75% (critical)
+- ⚪ **Gray/White**: N/A (no data available)
 
 ### 6. Non-Functional Requirements
 
@@ -188,6 +205,7 @@ Quit (⌘Q)
   - Network failures
   - AWS API errors
   - Invalid responses
+  - Missing CloudWatch data
 - Continue operating if individual instance metrics fail
 - Log errors without crashing
 
@@ -215,6 +233,49 @@ Quit (⌘Q)
 // Products used:
 - AWSRDS (RDS API client)
 - AWSCloudWatch (CloudWatch API client)
+
+// Implicit dependencies from AWS SDK:
+- ClientRuntime
+- AWSClientRuntime
+- AwsCommonRuntimeKit
+```
+
+### AWS SDK Type Namespacing
+
+**Important**: CloudWatch types must use full namespace prefix:
+
+```swift
+// Correct:
+CloudWatchClientTypes.MetricDataQuery
+CloudWatchClientTypes.MetricStat
+CloudWatchClientTypes.Metric
+CloudWatchClientTypes.Dimension
+
+// Incorrect (will conflict with Foundation types):
+MetricDataQuery  // Not found
+Dimension        // Conflicts with Foundation.Dimension
+```
+
+### AWS SDK Credential API
+
+The AWS SDK for Swift uses `StaticAWSCredentialIdentityResolver`:
+
+```swift
+// Correct (current API):
+let config = try await RDSClient.RDSClientConfiguration(
+    awsCredentialIdentityResolver: try StaticAWSCredentialIdentityResolver(
+        AWSCredentialIdentity(
+            accessKey: credentials.accessKeyId,
+            secret: credentials.secretAccessKey,
+            sessionToken: credentials.sessionToken  // Optional
+        )
+    ),
+    region: currentRegion
+)
+
+// Incorrect (old API - does not exist):
+AWSCredentialsProvider.fromStatic(...)  // Does not exist
+credentialsProvider: ...                 // Wrong parameter name
 ```
 
 ### AWS IAM Permissions Required
@@ -258,33 +319,37 @@ Quit (⌘Q)
                      ↓
 ┌─────────────────────────────────────────────────────────────┐
 │ RDSMonitoringService.fetchMetrics()                         │
+│ - Time window: 1 hour ago → now                             │
 │ - For each instance:                                        │
 │   - Build MetricDataQuery for CPU, Connections, Storage     │
-│   - Call GetMetricData (batched)                            │
-│   - Parse metric values                                     │
+│   - Call GetMetricData                                      │
+│   - Parse metric values (first = most recent)               │
 │   - Calculate derived metrics                               │
+│   - Handle N/A (-1) for missing data                        │
 │   - Store in metricsCache                                   │
 └────────────────────┬────────────────────────────────────────┘
                      ↓
 ┌─────────────────────────────────────────────────────────────┐
 │ RDSMonitoringService.checkAlerts()                          │
 │ - For each instance with metrics:                           │
-│   - Evaluate thresholds (>50%)                              │
+│   - Evaluate thresholds (>50%, ignoring -1)                 │
 │   - If breached → AlertManager.sendAlert()                  │
 │   - If recovered → AlertManager.clearAlert()                │
 └────────────────────┬────────────────────────────────────────┘
                      ↓
 ┌─────────────────────────────────────────────────────────────┐
 │ AlertManager                                                │
+│ - Check if running as bundle (Bundle.main.bundleIdentifier) │
+│ - Log alert to console (always)                             │
+│ - Send UNNotification (only if bundled)                     │
 │ - Check deduplication rules                                 │
-│ - Send UNNotification if needed                             │
 │ - Update alert state tracking                               │
 └────────────────────┬────────────────────────────────────────┘
                      ↓
 ┌─────────────────────────────────────────────────────────────┐
 │ AppDelegate.updateMenu()                                    │
 │ - Rebuild menu with latest data                             │
-│ - Apply color coding                                        │
+│ - Apply color coding (filter -1 for max calculation)        │
 │ - Update "Last updated" timestamp                           │
 └─────────────────────────────────────────────────────────────┘
 ```
@@ -298,10 +363,20 @@ Quit (⌘Q)
 ```
 PulseBar/
 ├── Package.swift                 # SPM configuration
-├── Info.plist                    # macOS app metadata
+├── Package.resolved              # Locked dependency versions
+├── Info.plist                    # macOS app metadata (LSUIElement=true)
 ├── Makefile                      # Build automation
 ├── README.md                     # User documentation
 ├── agents.md                     # This file
+├── .gitignore                    # Git ignore rules
+├── .github/
+│   ├── PULL_REQUEST_TEMPLATE.md  # PR template
+│   └── workflows/
+│       ├── pr-validation.yml     # CI for pull requests
+│       ├── release.yml           # Build on release
+│       └── README.md             # Workflow documentation
+├── build/                        # Built app bundle (gitignored)
+│   └── PulseBar.app/
 └── Sources/
     ├── main.swift               # Entry point
     ├── AppDelegate.swift        # UI & app lifecycle
@@ -328,13 +403,15 @@ PulseBar/
   - Handle user interactions (profile/region selection, refresh)
   - Coordinate RDSMonitoringService
   - Manage 15-minute refresh timer
-  - Request notification permissions
+  - Request notification permissions (gracefully handles non-bundle)
 - **Key Methods**:
   - `applicationDidFinishLaunching()` - Setup
   - `updateMenu()` - Rebuild menu with current data
   - `createInstanceMenuItem()` - Format instance data for display
+  - `createMetricMenuItem()` - Format individual metric with color
   - `refreshData()` - Trigger data refresh
-  - `startAutoRefresh()` - Setup timer
+  - `startAutoRefresh()` - Setup 900s timer
+  - `requestNotificationPermissions()` - Safe notification setup
 
 #### AWSCredentialsReader.swift
 - **Purpose**: Parse AWS configuration files
@@ -355,17 +432,21 @@ PulseBar/
   - Fetch RDS instances via SDK
   - Fetch CloudWatch metrics via SDK
   - Calculate derived metrics
+  - Handle N/A values (-1)
   - Cache metrics in memory
   - Trigger alert checks
 - **Key Methods**:
   - `refresh()` - Main refresh orchestrator
   - `fetchRDSInstances()` - Call RDS API
-  - `fetchMetrics()` - Call CloudWatch API
+  - `fetchMetrics()` - Call CloudWatch API (1-hour window)
   - `fetchInstanceMetrics()` - Per-instance metric collection
   - `checkAlerts()` - Evaluate alert conditions
   - `createRDSClient()` - Initialize RDS SDK client
   - `createCloudWatchClient()` - Initialize CloudWatch SDK client
+  - `estimateMaxConnections()` - Estimate max_connections from instance class
 - **State**:
+  - `currentProfile: String` - Default: "default"
+  - `currentRegion: String` - Default: "us-west-2"
   - `instances: [RDSInstance]` - Current RDS instances
   - `metricsCache: [String: RDSMetrics]` - Latest metrics by instance ID
   - `lastUpdateTime: Date?` - Timestamp of last successful refresh
@@ -375,15 +456,18 @@ PulseBar/
 - **Responsibilities**:
   - Track alert state per instance
   - Implement deduplication logic
-  - Send macOS notifications
+  - Check for bundle availability
+  - Send macOS notifications (when bundled)
+  - Always log alerts to console
   - Clear alerts when recovered
 - **Key Methods**:
   - `sendAlert()` - Evaluate and send notification
   - `clearAlert()` - Remove alert state
   - `sendNotification()` - Wrapper for UNNotification
-  - `getAlertingMetrics()` - Convert metrics to alerting set
+  - `getAlertingMetrics()` - Convert metrics to alerting set (ignores -1)
 - **State**:
   - `activeAlerts: [String: AlertState]` - Current alerts by instance ID
+  - `notificationsAvailable: Bool` - True if Bundle.main.bundleIdentifier != nil
 
 #### Models.swift
 - **Purpose**: Data structures
@@ -392,8 +476,8 @@ PulseBar/
   - `RDSMetrics` - Collected and calculated metrics
   - `AlertState` - Alert tracking state
 - **Methods**:
-  - `RDSMetrics.hasAlert()` - Check if any threshold breached
-  - `RDSMetrics.getAlertMessage()` - Format notification message
+  - `RDSMetrics.hasAlert()` - Check if any threshold breached (ignores -1)
+  - `RDSMetrics.getAlertMessage()` - Format notification message (ignores -1)
 
 ---
 
@@ -440,48 +524,46 @@ for instance in instances {
 }
 ```
 
-#### Optional Safety
+#### N/A Value Handling
 ```swift
-// Pattern: Guard for required values, nil-coalescing for defaults
-guard let keyId = accessKeyId, let secretKey = secretAccessKey else {
-    return nil
+// Pattern: Use -1 to indicate "no data available"
+var storageUsedPercent: Double = 0
+if freeStorageSpace > 0 && allocatedStorageBytes > 0 {
+    let usedStorageBytes = allocatedStorageBytes - freeStorageSpace
+    storageUsedPercent = (usedStorageBytes / allocatedStorageBytes) * 100
+} else if allocatedStorageBytes > 0 && freeStorageSpace == 0 {
+    storageUsedPercent = -1  // N/A
 }
 
-let allocatedStorage = Int(db.allocatedStorage ?? 0)
-```
-
-#### Singleton Pattern
-```swift
-// Pattern: Shared instance for stateless utilities
-class AWSCredentialsReader {
-    static let shared = AWSCredentialsReader()
-    private init() { ... }
+// In UI, check for -1
+if value < 0 {
+    item.title = "⚪ \(label): N/A"
+} else {
+    // normal display with color coding
 }
 
-// Usage:
-let profiles = AWSCredentialsReader.shared.listProfiles()
+// In alert logic, filter out -1
+let validValues = [cpu, connections, storage].filter { $0 >= 0 }
 ```
 
 ### AWS SDK Patterns
 
-#### Client Initialization
+#### Client Initialization (Current API)
 ```swift
-// Pattern: Create client with credentials provider per request
 private func createRDSClient() async throws -> RDSClient {
     guard let credentials = AWSCredentialsReader.shared.getCredentials(profile: currentProfile) else {
-        throw NSError(...)
+        throw NSError(domain: "PulseBar", code: 1, 
+            userInfo: [NSLocalizedDescriptionKey: "Failed to load AWS credentials"])
     }
     
-    let credentialsProvider = try AWSCredentialsProvider.fromStatic(
-        AWSClientRuntime.AWSCredentials(
-            accessKey: credentials.accessKeyId,
-            secret: credentials.secretAccessKey,
-            sessionToken: credentials.sessionToken
-        )
-    )
-    
     let config = try await RDSClient.RDSClientConfiguration(
-        credentialsProvider: credentialsProvider,
+        awsCredentialIdentityResolver: try StaticAWSCredentialIdentityResolver(
+            AWSCredentialIdentity(
+                accessKey: credentials.accessKeyId,
+                secret: credentials.secretAccessKey,
+                sessionToken: credentials.sessionToken
+            )
+        ),
         region: currentRegion
     )
     
@@ -489,93 +571,54 @@ private func createRDSClient() async throws -> RDSClient {
 }
 ```
 
-#### Batched Metric Queries
+#### CloudWatch Metric Queries
 ```swift
-// Pattern: Build array of MetricDataQuery, single GetMetricData call
-var queries: [MetricDataQuery] = []
+// Pattern: Use CloudWatchClientTypes namespace for all types
+var queries: [CloudWatchClientTypes.MetricDataQuery] = []
 
-queries.append(MetricDataQuery(
+queries.append(CloudWatchClientTypes.MetricDataQuery(
     id: "cpu",
-    metricStat: MetricStat(
-        metric: Metric(
-            dimensions: [Dimension(name: "DBInstanceIdentifier", value: instanceId)],
+    metricStat: CloudWatchClientTypes.MetricStat(
+        metric: CloudWatchClientTypes.Metric(
+            dimensions: [
+                CloudWatchClientTypes.Dimension(name: "DBInstanceIdentifier", value: instanceId)
+            ],
             metricName: "CPUUtilization",
             namespace: "AWS/RDS"
         ),
-        period: 300,
+        period: 300,  // 5 minutes for CPU/connections
         stat: "Average"
     )
 ))
 
-// ... add more queries
-
-let response = try await client.getMetricData(input: input)
-
-// Parse by matching result.id
-for result in results {
-    switch result.id {
-    case "cpu": cpuUtilization = values[0]
-    case "connections": currentConnections = values[0]
-    // ...
-    }
-}
-```
-
-### UI/AppKit Patterns
-
-#### Menu Building
-```swift
-// Pattern: Clear and rebuild menu on updates
-func updateMenu() {
-    menu.removeAllItems()
-    
-    // Add sections in order
-    menu.addItem(profileSelector)
-    menu.addItem(regionSelector)
-    menu.addItem(NSMenuItem.separator())
-    menu.addItem(refreshButton)
-    menu.addItem(NSMenuItem.separator())
-    
-    // Dynamic content
-    for instance in instances {
-        menu.addItem(createInstanceMenuItem(instance))
-    }
-    
-    menu.addItem(NSMenuItem.separator())
-    menu.addItem(lastUpdatedLabel)
-    menu.addItem(NSMenuItem.separator())
-    menu.addItem(quitButton)
-}
-```
-
-#### Submenu Pattern
-```swift
-// Pattern: Create submenu for hierarchical data
-let submenu = NSMenu()
-submenu.addItem(NSMenuItem(title: "Details", action: nil, keyEquivalent: ""))
-// ... add more items
-
-let mainItem = NSMenuItem(title: "Instance Name", action: nil, keyEquivalent: "")
-mainItem.submenu = submenu
-menu.addItem(mainItem)
-```
-
-#### Status Indicator Pattern
-```swift
-// Pattern: Checkmark for selected item
-for option in options {
-    let item = NSMenuItem(title: option, action: #selector(selectOption), keyEquivalent: "")
-    item.state = (option == currentSelection) ? .on : .off
-    submenu.addItem(item)
-}
+// Storage needs longer period
+queries.append(CloudWatchClientTypes.MetricDataQuery(
+    id: "storage",
+    metricStat: CloudWatchClientTypes.MetricStat(
+        metric: CloudWatchClientTypes.Metric(
+            dimensions: [
+                CloudWatchClientTypes.Dimension(name: "DBInstanceIdentifier", value: instanceId)
+            ],
+            metricName: "FreeStorageSpace",
+            namespace: "AWS/RDS"
+        ),
+        period: 3600,  // 1 hour for storage (more reliable)
+        stat: "Average"
+    )
+))
 ```
 
 ### Notification Patterns
 
-#### Permission Request
+#### Safe Permission Request
 ```swift
-// Pattern: Request on app launch
-func applicationDidFinishLaunching(_ notification: Notification) {
+private func requestNotificationPermissions() {
+    // Check if we're running as a proper app bundle
+    guard Bundle.main.bundleIdentifier != nil else {
+        print("⚠️ Running without app bundle - notifications disabled")
+        return
+    }
+    
     UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { granted, error in
         if let error = error {
             print("Notification permission error: \(error)")
@@ -584,56 +627,33 @@ func applicationDidFinishLaunching(_ notification: Notification) {
 }
 ```
 
-#### Notification Sending
+#### Safe Notification Sending
 ```swift
-// Pattern: Create content, send with unique ID
-let content = UNMutableNotificationContent()
-content.title = "Title"
-content.body = "Body"
-content.sound = .default
-
-let request = UNNotificationRequest(
-    identifier: UUID().uuidString,
-    content: content,
-    trigger: nil  // Immediate delivery
-)
-
-UNUserNotificationCenter.current().add(request) { error in
-    // Handle error
-}
-```
-
-### State Management
-
-#### In-Memory Cache Pattern
-```swift
-// Pattern: Dictionary cache with instance ID keys
-var metricsCache: [String: RDSMetrics] = [:]
-
-func getMetrics(for instanceId: String) -> RDSMetrics? {
-    return metricsCache[instanceId]
-}
-
-// Update atomically
-metricsCache[instance.identifier] = newMetrics
-```
-
-#### Alert State Tracking
-```swift
-// Pattern: Track state with timestamp and details
-private var activeAlerts: [String: AlertState] = [:]
-
-// Check before sending
-if let existingAlert = activeAlerts[instanceId] {
-    let timeSinceLastAlert = Date().timeIntervalSince(existingAlert.timestamp)
-    if currentMetrics != existingAlert.alertingMetrics || timeSinceLastAlert > 900 {
-        sendNotification(message)
-        updateAlertState(instanceId, metrics)
+private func sendNotification(message: String) {
+    // Always log to console
+    print("🚨 ALERT: \(message)")
+    
+    // Only send system notification if running as bundled app
+    guard notificationsAvailable else {
+        return
     }
-} else {
-    // New alert
-    sendNotification(message)
-    updateAlertState(instanceId, metrics)
+    
+    let content = UNMutableNotificationContent()
+    content.title = "PulseBar - RDS Alert"
+    content.body = message
+    content.sound = .default
+    
+    let request = UNNotificationRequest(
+        identifier: UUID().uuidString,
+        content: content,
+        trigger: nil
+    )
+    
+    UNUserNotificationCenter.current().add(request) { error in
+        if let error = error {
+            print("Error sending notification: \(error)")
+        }
+    }
 }
 ```
 
@@ -650,40 +670,8 @@ if let existingAlert = activeAlerts[instanceId] {
 - **Constants**: camelCase with `let` (`maxConnections`)
 - **Private members**: Prefix with `private` keyword
 
-#### Method Organization
-```swift
-// Pattern: Public interface first, private helpers last
-class MyService {
-    // MARK: - Public Properties
-    var publicProperty: String
-    
-    // MARK: - Public Methods
-    func publicMethod() { }
-    
-    // MARK: - Private Properties
-    private var privateProperty: Int
-    
-    // MARK: - Private Methods
-    private func privateHelper() { }
-}
-```
+### Testing Checklist
 
-#### Comments
-```swift
-// Pattern: Comments for "why", not "what"
-// Good:
-// Estimate max connections based on instance class
-// In production, this should query the parameter group
-let maxConnections = estimateMaxConnections(instanceClass)
-
-// Bad:
-// Get max connections
-let maxConnections = estimateMaxConnections(instanceClass)
-```
-
-### Testing Strategy
-
-#### Manual Testing Checklist
 1. **Credentials**:
    - [ ] App loads with valid credentials
    - [ ] App handles missing credentials gracefully
@@ -693,6 +681,7 @@ let maxConnections = estimateMaxConnections(instanceClass)
 2. **Data Fetching**:
    - [ ] RDS instances load correctly
    - [ ] Metrics appear for each instance
+   - [ ] Storage shows actual value (not N/A or 100%)
    - [ ] Manual refresh updates data
    - [ ] Auto-refresh triggers every 15 minutes
 
@@ -700,65 +689,50 @@ let maxConnections = estimateMaxConnections(instanceClass)
    - [ ] Menu bar icon appears
    - [ ] Menu opens on click
    - [ ] Color coding reflects metric values
+   - [ ] N/A displays correctly for missing data
    - [ ] Submenus expand correctly
 
-4. **Alerts**:
+4. **Alerts** (requires `make install`):
    - [ ] Notification sent when metric > 50%
    - [ ] No duplicate notifications for same condition
    - [ ] New notification when different metric breaches
    - [ ] Alert clears when metrics recover
-
-### Extension Points
-
-#### Adding New Metrics
-1. Add metric to `MetricDataQuery` array in `fetchInstanceMetrics()`
-2. Add case to result parsing switch statement
-3. Add field to `RDSMetrics` struct
-4. Update `createInstanceMenuItem()` to display
-5. Update `hasAlert()` if threshold applies
-6. Update `getAlertMessage()` if should appear in notifications
-
-#### Supporting New AWS Services
-1. Add SDK dependency to `Package.swift`
-2. Create new service class following `RDSMonitoringService` pattern
-3. Implement client initialization with credentials
-4. Add fetching methods with async/await
-5. Integrate into `AppDelegate` refresh cycle
-
-#### Customizing Alert Thresholds
-Current implementation uses hardcoded 50% threshold. To make configurable:
-1. Add `alertThreshold: Double` property to `RDSMonitoringService`
-2. Add UI for threshold selection in `AppDelegate`
-3. Update `hasAlert()` to use variable threshold
-4. Persist threshold in `UserDefaults` (optional)
+   - [ ] Console shows alert even without bundle
 
 ### Build and Release
 
-#### Development Build
 ```bash
+# Development
 swift build          # Debug build
-swift run            # Run debug build
-```
+swift run            # Run debug (no notifications)
+make run             # Same as swift run
 
-#### Release Build
-```bash
-swift build -c release
+# Release
+swift build -c release    # Release build
+make build                # Same as above
 # Binary at: .build/release/PulseBar
+
+# Installation
+make install         # Creates .app and copies to /Applications
+make clean           # Remove build artifacts
 ```
 
-#### Installation
-```bash
-make install
-# Creates .app bundle and copies to /Applications
-```
+### CI/CD
 
-#### Debugging
-```bash
-# View console logs
-log stream --predicate 'processImagePath contains "PulseBar"' --level debug
-```
+GitHub Actions workflows in `.github/workflows/`:
 
-### Known Limitations (v1)
+- **pr-validation.yml**: Runs on PRs to main/develop
+  - Builds debug and release
+  - Validates Package.swift
+  - Checks for hardcoded credentials
+
+- **release.yml**: Runs on GitHub release creation
+  - Builds release binary
+  - Creates .app bundle
+  - Uploads ZIP to release
+  - Includes SHA256 checksum
+
+### Known Limitations
 
 1. **Max Connections Estimation**: Currently estimates based on instance class naming. Should query RDS parameter groups for actual `max_connections` value.
 
@@ -768,27 +742,9 @@ log stream --predicate 'processImagePath contains "PulseBar"' --level debug
 
 4. **No Performance Insights**: Not integrated with RDS Performance Insights API.
 
-5. **Basic Error Handling**: Network errors logged but not shown to user. Future: Add error states in UI.
+5. **Notifications Require Bundle**: Must use `make install` for macOS notifications.
 
-### Future Enhancements
-
-#### High Priority
-- [ ] Query parameter groups for accurate `max_connections`
-- [ ] Add error indicators in UI (not just logs)
-- [ ] Persist alert state across app restarts
-- [ ] Add preference pane for customization
-
-#### Medium Priority
-- [ ] Historical metric graphs (last hour/day)
-- [ ] Export metrics to CSV/JSON
-- [ ] Custom alert thresholds per instance
-- [ ] Dark mode color scheme optimization
-
-#### Low Priority
-- [ ] Performance Insights integration
-- [ ] Multi-account dashboard
-- [ ] Query execution monitoring
-- [ ] Auto-scaling recommendations
+6. **Storage Data Availability**: CloudWatch may not report FreeStorageSpace frequently for all instances.
 
 ---
 
@@ -800,50 +756,43 @@ log stream --predicate 'processImagePath contains "PulseBar"' --level debug
 |------|----------------|-----------|
 | Add new metric | `RDSMonitoringService.swift`, `Models.swift` | `fetchInstanceMetrics()`, `RDSMetrics` struct |
 | Change UI layout | `AppDelegate.swift` | `updateMenu()`, `createInstanceMenuItem()` |
-| Modify alert logic | `AlertManager.swift` | `sendAlert()`, `getAlertingMetrics()` |
+| Modify alert logic | `AlertManager.swift`, `Models.swift` | `sendAlert()`, `hasAlert()`, `getAlertingMetrics()` |
 | Add AWS profile support | `AWSCredentialsReader.swift` | `getCredentials()`, `listProfiles()` |
 | Change refresh interval | `AppDelegate.swift` | `startAutoRefresh()` (currently 900s) |
+| Change default region | `RDSMonitoringService.swift` | `currentRegion` property |
+| Adjust time window | `RDSMonitoringService.swift` | `fetchMetrics()` - `startTime` calculation |
 
-### Environment Variables (Optional)
+### Important Constants
 
-```bash
-# Override AWS config location
-export AWS_CONFIG_FILE=~/.aws/config
-export AWS_SHARED_CREDENTIALS_FILE=~/.aws/credentials
-
-# AWS SDK debug logging
-export AWS_LOG_LEVEL=debug
-```
-
-### Useful Commands
-
-```bash
-# Clean build
-make clean
-
-# Run without building
-./.build/debug/PulseBar
-
-# Check for updates to AWS SDK
-swift package update
-
-# Show dependency tree
-swift package show-dependencies
-```
+| Constant | Value | Location | Description |
+|----------|-------|----------|-------------|
+| Refresh interval | 900s (15 min) | AppDelegate | Auto-refresh timer |
+| CloudWatch window | 3600s (1 hour) | RDSMonitoringService | Time range for metrics |
+| CPU/Conn period | 300s (5 min) | RDSMonitoringService | CloudWatch aggregation |
+| Storage period | 3600s (1 hour) | RDSMonitoringService | Longer for reliability |
+| Alert threshold | 50% | Models.swift | All metrics |
+| Default region | us-west-2 | RDSMonitoringService | Initial region |
 
 ---
 
-## Contact & Contribution
+## Troubleshooting Development Issues
 
-For questions, bug reports, or feature requests, please open an issue on the repository.
+### "Cannot find type 'MetricDataQuery' in scope"
+Use fully qualified name: `CloudWatchClientTypes.MetricDataQuery`
 
-When contributing, ensure:
-1. Code follows Swift conventions
-2. All AWS API calls use async/await
-3. Error handling is graceful
-4. UI updates happen on main thread
-5. No credentials are logged or persisted
-6. Changes are tested with multiple profiles/regions
+### "Cannot find 'AWSCredentialsProvider' in scope"
+Old API. Use `StaticAWSCredentialIdentityResolver` with `AWSCredentialIdentity`.
+
+### "bundleProxyForCurrentProcess is nil"
+Running via `swift run` without app bundle. Use `make install` for notifications.
+
+### Storage always shows 100% or N/A
+- Check CloudWatch time window (should be 1 hour)
+- Check storage period (should be 3600s)
+- Verify `FreeStorageSpace` is being returned in CloudWatch response
+
+### Build takes forever
+First build downloads ~200MB of AWS SDK. Subsequent builds are fast.
 
 ---
 

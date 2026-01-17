@@ -2,6 +2,10 @@
 
 A macOS menu bar app for monitoring AWS RDS instances with real-time health metrics and alerts.
 
+![macOS](https://img.shields.io/badge/macOS-13.0+-blue)
+![Swift](https://img.shields.io/badge/Swift-5.9+-orange)
+![License](https://img.shields.io/badge/License-MIT-green)
+
 ## Features
 
 - 📊 **Real-time Monitoring**: Track CPU, connections, storage, and activity for all RDS instances
@@ -15,10 +19,12 @@ A macOS menu bar app for monitoring AWS RDS instances with real-time health metr
 
 For each RDS instance:
 
-- **CPU Utilization** (%) - from CloudWatch `CPUUtilization`
-- **Connections Used** (%) - `DatabaseConnections / max_connections * 100`
-- **Storage Used** (%) - `(AllocatedStorage - FreeStorageSpace) / AllocatedStorage * 100`
-- **Activity** - Current number of database connections
+| Metric | Source | Description |
+|--------|--------|-------------|
+| **CPU Utilization** | CloudWatch `CPUUtilization` | Current CPU usage percentage |
+| **Connections Used** | `DatabaseConnections / max_connections × 100` | Percentage of connection pool used |
+| **Storage Used** | `(AllocatedStorage - FreeStorageSpace) / AllocatedStorage × 100` | Percentage of disk space used |
+| **Activity** | CloudWatch `DatabaseConnections` | Current number of database connections |
 
 ## Requirements
 
@@ -52,7 +58,7 @@ For each RDS instance:
 git clone <repository-url>
 cd PulseBar
 
-# Build and install
+# Build and install to /Applications
 make install
 ```
 
@@ -66,11 +72,13 @@ make run
 make build
 ```
 
+> **Note**: When running via `make run` (without app bundle), macOS notifications are disabled. Use `make install` for full functionality.
+
 ## AWS Credentials Setup
 
 Ensure you have AWS credentials configured:
 
-```bash
+```ini
 # ~/.aws/credentials
 [default]
 aws_access_key_id = YOUR_ACCESS_KEY
@@ -79,13 +87,31 @@ aws_secret_access_key = YOUR_SECRET_KEY
 [production]
 aws_access_key_id = PROD_ACCESS_KEY
 aws_secret_access_key = PROD_SECRET_KEY
+```
 
+```ini
 # ~/.aws/config
 [default]
-region = us-east-1
+region = us-west-2
 
 [profile production]
-region = us-west-2
+region = us-east-1
+```
+
+### Required IAM Permissions
+
+```json
+{
+  "Version": "2012-10-17",
+  "Statement": [{
+    "Effect": "Allow",
+    "Action": [
+      "rds:DescribeDBInstances",
+      "cloudwatch:GetMetricData"
+    ],
+    "Resource": "*"
+  }]
+}
 ```
 
 ## Usage
@@ -99,10 +125,27 @@ region = us-west-2
 ### Menu Options
 
 - **Profile Selector**: Switch between AWS profiles
-- **Region Selector**: Change AWS region
+- **Region Selector**: Change AWS region (us-east-1, us-west-2, eu-west-1, etc.)
 - **Refresh Now**: Manual refresh (⌘R)
 - **Instance List**: Click any instance for details
 - **Quit**: Exit the application (⌘Q)
+
+### Understanding the Display
+
+```
+🟢 my-database-prod          # Green = all metrics healthy (<50%)
+   postgres - db.r5.large    # Engine and instance class
+   🟢 CPU: 12.5%             # CPU utilization
+   🟢 Connections: 23.1%     # Connection pool usage
+   🔴 Storage: 78.2%         # Storage used (red = >75%)
+   Activity: 14 connections  # Raw connection count
+```
+
+**Color Coding:**
+- 🟢 Green: < 50% (healthy)
+- 🟡 Yellow: 50-75% (warning)
+- 🔴 Red: > 75% (critical)
+- ⚪ Gray: N/A (data unavailable)
 
 ## Alert Behavior
 
@@ -115,12 +158,13 @@ Notifications are sent when any metric exceeds 50%:
   - 15+ minutes since last alert for same condition
 
 Example notification:
-
 ```
 ⚠️ RDS Alert: production-db
 CPU: 72%
 Connections: 61%
 ```
+
+> **Note**: Notifications only work when running as an installed app bundle (`make install`), not via `swift run`.
 
 ## Architecture
 
@@ -131,7 +175,7 @@ Load AWS Profile/Credentials
    ↓
 DescribeDBInstances (RDS API)
    ↓
-GetMetricData (CloudWatch API)
+GetMetricData (CloudWatch API) - 1 hour window
    ↓
 Metric Calculations
    ↓
@@ -151,10 +195,15 @@ PulseBar/
 │   ├── RDSMonitoringService.swift    # AWS SDK integration
 │   ├── AlertManager.swift            # Notification logic
 │   └── Models.swift                  # Data structures
+├── .github/
+│   └── workflows/
+│       ├── pr-validation.yml         # PR build checks
+│       └── release.yml               # Auto-build on release
 ├── Package.swift                     # Swift Package Manager config
 ├── Info.plist                        # App metadata
 ├── Makefile                          # Build commands
-└── README.md
+├── README.md                         # This file
+└── agents.md                         # Developer/AI agent guide
 ```
 
 ## Development
@@ -162,24 +211,27 @@ PulseBar/
 ### Build Commands
 
 ```bash
-# Debug build and run
-make run
-
-# Release build
-make build
-
-# Clean build artifacts
-make clean
-
-# Install to /Applications
-make install
+make run      # Debug build and run
+make build    # Release build (.build/release/PulseBar)
+make clean    # Clean build artifacts
+make install  # Install to /Applications
+make help     # Show all commands
 ```
 
 ### Dependencies
 
-- `aws-sdk-swift` (AWSRDS, AWSCloudWatch)
+- `aws-sdk-swift` v0.40.0+ (AWSRDS, AWSCloudWatch)
 
 Dependencies are managed via Swift Package Manager and will be automatically resolved on build.
+
+## CI/CD
+
+This project includes GitHub Actions for:
+
+- **PR Validation**: Builds and validates code on every pull request
+- **Release Build**: Automatically builds and attaches binaries to GitHub releases
+
+See `.github/workflows/` for details.
 
 ## Limitations (v1)
 
@@ -188,6 +240,7 @@ Dependencies are managed via Swift Package Manager and will be automatically res
 - No Performance Insights integration
 - Single account only (no multi-account aggregation)
 - Read-only monitoring (cannot modify RDS instances)
+- Notifications require app bundle (not available via `swift run`)
 
 ## Troubleshooting
 
@@ -201,11 +254,20 @@ Verify your IAM user/role has these permissions:
 - `rds:DescribeDBInstances`
 - `cloudwatch:GetMetricData`
 
+### Storage shows "N/A"
+
+CloudWatch may not have recent data. The app queries a 1-hour window; if no data exists, it shows N/A.
+
 ### Notifications not appearing
 
-1. Check System Settings → Notifications → PulseBar
-2. Ensure notifications are enabled
-3. Restart the app if needed
+1. Ensure you're running the installed app (`/Applications/PulseBar.app`), not `swift run`
+2. Check System Settings → Notifications → PulseBar
+3. Ensure notifications are enabled
+4. Restart the app if needed
+
+### High CPU/memory usage during first run
+
+The first build downloads and compiles AWS SDK dependencies (~200 MB). Subsequent runs will be fast.
 
 ## License
 
@@ -213,7 +275,12 @@ MIT License - See LICENSE file for details
 
 ## Contributing
 
-Contributions welcome! Please open an issue or PR.
+Contributions welcome! Please see `agents.md` for development guidelines and architecture details.
+
+1. Fork the repository
+2. Create a feature branch
+3. Make your changes
+4. Submit a pull request
 
 ## Roadmap
 
@@ -223,4 +290,4 @@ Contributions welcome! Please open an issue or PR.
 - [ ] Multi-account support
 - [ ] Custom alert thresholds
 - [ ] Export metrics to CSV/JSON
-- [ ] Dark mode improvements
+- [ ] Sparkline trends in menu
