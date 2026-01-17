@@ -367,6 +367,10 @@ PulseBar/
 ├── Info.plist                    # macOS app metadata (LSUIElement=true)
 ├── Makefile                      # Build automation
 ├── README.md                     # User documentation
+├── CONTRIBUTING.md               # Contribution guidelines
+├── CODE_OF_CONDUCT.md            # Community standards
+├── SECURITY.md                   # Security policy
+├── LICENSE                       # MIT License
 ├── agents.md                     # This file
 ├── .gitignore                    # Git ignore rules
 ├── .github/

@@ -39,7 +39,7 @@ For each RDS instance:
 
 ### Option 1: Download Pre-built Release
 
-1. Go to the [Releases page](https://github.com/yourusername/PulseBar/releases)
+1. Go to the [Releases page](../../releases)
 2. Download the latest `PulseBar-vX.X.X-macOS.zip`
 3. Verify checksum (optional):
    ```bash
@@ -196,13 +196,19 @@ PulseBar/
 │   ├── AlertManager.swift            # Notification logic
 │   └── Models.swift                  # Data structures
 ├── .github/
+│   ├── PULL_REQUEST_TEMPLATE.md      # PR template
 │   └── workflows/
 │       ├── pr-validation.yml         # PR build checks
-│       └── release.yml               # Auto-build on release
+│       ├── release.yml               # Auto-build on release
+│       └── README.md                 # Workflow documentation
 ├── Package.swift                     # Swift Package Manager config
 ├── Info.plist                        # App metadata
 ├── Makefile                          # Build commands
 ├── README.md                         # This file
+├── CONTRIBUTING.md                   # Contribution guidelines
+├── CODE_OF_CONDUCT.md                # Community standards
+├── SECURITY.md                       # Security policy
+├── LICENSE                           # MIT License
 └── agents.md                         # Developer/AI agent guide
 ```
 
@@ -275,12 +281,14 @@ MIT License - See LICENSE file for details
 
 ## Contributing
 
-Contributions welcome! Please see `agents.md` for development guidelines and architecture details.
+Contributions welcome! Please read our [Contributing Guidelines](CONTRIBUTING.md) before getting started.
 
 1. Fork the repository
 2. Create a feature branch
 3. Make your changes
 4. Submit a pull request
+
+For architecture and technical details, see [agents.md](agents.md).
 
 ## Roadmap
 
