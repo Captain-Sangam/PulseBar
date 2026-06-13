@@ -113,7 +113,8 @@ class RDSMonitoringService {
                     maxConnections: maxConnections,
                     status: status,
                     dbiResourceId: db.dbiResourceId,
-                    performanceInsightsEnabled: db.performanceInsightsEnabled ?? false
+                    performanceInsightsEnabled: db.performanceInsightsEnabled ?? false,
+                    readReplicaSource: db.readReplicaSourceDBInstanceIdentifier
                 )
                 
                 newInstances.append(instance)
@@ -220,6 +221,22 @@ class RDSMonitoringService {
             )
         ))
 
+        // Replica lag (seconds) — only reports for read replicas.
+        queries.append(CloudWatchClientTypes.MetricDataQuery(
+            id: "replicalag",
+            metricStat: CloudWatchClientTypes.MetricStat(
+                metric: CloudWatchClientTypes.Metric(
+                    dimensions: [
+                        CloudWatchClientTypes.Dimension(name: "DBInstanceIdentifier", value: instanceId)
+                    ],
+                    metricName: "ReplicaLag",
+                    namespace: "AWS/RDS"
+                ),
+                period: 300,
+                stat: "Average"
+            )
+        ))
+
         let input = GetMetricDataInput(
             endTime: endTime,
             metricDataQueries: queries,
@@ -233,6 +250,7 @@ class RDSMonitoringService {
         var currentConnections: Double = 0
         var freeStorageSpace: Double = 0
         var dbLoad: Double = -1  // -1 = N/A (Performance Insights disabled / no datapoint)
+        var replicaLag: Double = -1  // -1 = N/A (not a replica / no datapoint)
 
         // Parse CloudWatch response
 
@@ -251,6 +269,8 @@ class RDSMonitoringService {
                         freeStorageSpace = value
                     case "dbload":
                         dbLoad = value
+                    case "replicalag":
+                        replicaLag = value
                     default:
                         break
                     }
@@ -285,7 +305,8 @@ class RDSMonitoringService {
             connectionsUsedPercent: max(0, min(100, connectionsUsedPercent)),
             storageUsedPercent: storageUsedPercent == -1 ? -1 : max(0, min(100, storageUsedPercent)),
             freeStorageSpace: freeStorageSpace,
-            dbLoad: dbLoad
+            dbLoad: dbLoad,
+            replicaLag: replicaLag
         )
     }
     
@@ -454,6 +475,68 @@ class RDSMonitoringService {
         let hosts = await topItems(groupName: "db.host", dimensionKey: "db.host.name")
 
         return PerformanceInsightsData(enabled: true, topQueries: queries, topUsers: users, topHosts: hosts)
+    }
+
+    // MARK: - Events & alarms
+
+    /// Fetches recent RDS events (last 7 days) and any CloudWatch alarms in ALARM state for the
+    /// instance. Each source is fetched defensively so one failure doesn't sink the other.
+    func fetchInstanceActivity(instanceId: String) async throws -> InstanceActivity {
+        async let events = fetchRecentEvents(instanceId: instanceId)
+        async let alarms = fetchActiveAlarms(instanceId: instanceId)
+        return InstanceActivity(events: await events, alarms: await alarms)
+    }
+
+    private func fetchRecentEvents(instanceId: String) async -> [RDSEvent] {
+        do {
+            let client = try await createRDSClient()
+            // DescribeEvents accepts a duration in minutes; 7 days = 10080 minutes (the max retention).
+            let input = DescribeEventsInput(
+                duration: 10_080,
+                maxRecords: 20,
+                sourceIdentifier: instanceId,
+                sourceType: .dbInstance
+            )
+            let response = try await client.describeEvents(input: input)
+            let events = (response.events ?? []).compactMap { e -> RDSEvent? in
+                guard let date = e.date, let message = e.message else { return nil }
+                return RDSEvent(date: date, message: message, categories: e.eventCategories ?? [])
+            }
+            return events.sorted { $0.date > $1.date }
+        } catch {
+            print("DescribeEvents failed for \(instanceId): \(error)")
+            return []
+        }
+    }
+
+    private func fetchActiveAlarms(instanceId: String) async -> [CloudWatchAlarmInfo] {
+        do {
+            let client = try await createCloudWatchClient()
+            // Only metric alarms currently in ALARM state.
+            let input = DescribeAlarmsInput(
+                alarmTypes: [.metricalarm],
+                maxRecords: 50,
+                stateValue: .alarm
+            )
+            let response = try await client.describeAlarms(input: input)
+            let alarms = (response.metricAlarms ?? []).compactMap { a -> CloudWatchAlarmInfo? in
+                guard let name = a.alarmName else { return nil }
+                // Keep alarms that reference this instance via a DBInstanceIdentifier dimension.
+                let matchesInstance = (a.dimensions ?? []).contains {
+                    $0.name == "DBInstanceIdentifier" && $0.value == instanceId
+                }
+                guard matchesInstance else { return nil }
+                return CloudWatchAlarmInfo(
+                    name: name,
+                    reason: a.stateReason ?? "",
+                    metricName: a.metricName
+                )
+            }
+            return alarms
+        } catch {
+            print("DescribeAlarms failed for \(instanceId): \(error)")
+            return []
+        }
     }
     
     private func createRDSClient() async throws -> RDSClient {

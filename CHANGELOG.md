@@ -19,6 +19,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   sessions, shown in the detail dashboard (requires `pi:DescribeDimensionKeys`).
 - **In-menu alert banner** listing instances that breach thresholds, so alerts are visible
   even when system notifications are suppressed.
+- **Configurable settings** (⚙️ Settings submenu): alert threshold (default 50%) and auto-refresh
+  interval (1–60 min), persisted in UserDefaults.
+- **Read-replica grouping**: replicas are nested under their primary in the menu, with `ReplicaLag`.
+- **Events & Alarms panel** in the detail window: recent RDS events (`DescribeEvents`) and active
+  CloudWatch alarms (`DescribeAlarms`, ALARM state).
+- **Open in AWS Console**: per-database deep link to the RDS console.
 - GitHub issue templates (bug report, feature request) and this changelog.
 
 ### Changed

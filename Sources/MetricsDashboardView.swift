@@ -26,6 +26,7 @@ struct MetricsDashboardView: View {
                     ])
 
                     performanceInsightsSection
+                    activitySection
                 } else if model.errorMessage != nil {
                     placeholder(systemImage: "exclamationmark.triangle", text: model.errorMessage ?? "Error")
                 } else {
@@ -140,6 +141,57 @@ struct MetricsDashboardView: View {
             }
         }
     }
+
+    // MARK: - Events & alarms
+
+    @ViewBuilder
+    private var activitySection: some View {
+        if let activity = model.activity {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Events & Alarms").font(.headline)
+
+                // Active CloudWatch alarms (in ALARM state).
+                if !activity.alarms.isEmpty {
+                    ForEach(activity.alarms) { alarm in
+                        HStack(alignment: .top, spacing: 6) {
+                            Image(systemName: "bell.fill").foregroundColor(.red)
+                            VStack(alignment: .leading, spacing: 2) {
+                                Text(alarm.name).font(.caption).bold()
+                                if !alarm.reason.isEmpty {
+                                    Text(alarm.reason).font(.caption2).foregroundColor(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+
+                // Recent RDS events.
+                if activity.events.isEmpty && activity.alarms.isEmpty {
+                    Text("No recent events or active alarms.")
+                        .font(.callout).foregroundColor(.secondary).padding(.vertical, 4)
+                } else {
+                    ForEach(activity.events.prefix(10)) { event in
+                        HStack(alignment: .top, spacing: 6) {
+                            Text(Self.eventDateFormatter.string(from: event.date))
+                                .font(.caption2.monospacedDigit())
+                                .foregroundColor(.secondary)
+                                .frame(width: 96, alignment: .leading)
+                            Text(event.message).font(.caption)
+                        }
+                    }
+                }
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .padding(12)
+            .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.controlBackgroundColor)))
+        }
+    }
+
+    private static let eventDateFormatter: DateFormatter = {
+        let f = DateFormatter()
+        f.dateFormat = "MMM d HH:mm"
+        return f
+    }()
 
     // MARK: - Shared bits
 

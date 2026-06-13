@@ -34,6 +34,12 @@ struct RDSInstance {
 
     /// Whether Performance Insights is enabled for this instance.
     let performanceInsightsEnabled: Bool
+
+    /// If this instance is a read replica, the identifier of its source (primary) instance.
+    let readReplicaSource: String?
+
+    /// True when this instance is a read replica of another instance.
+    var isReadReplica: Bool { readReplicaSource != nil }
 }
 
 struct RDSMetrics {
@@ -47,33 +53,38 @@ struct RDSMetrics {
     /// or no datapoint is available — callers fall back to `currentConnections`.
     let dbLoad: Double
 
+    /// Read-replica lag in seconds (CloudWatch `ReplicaLag`). `-1` for non-replicas / no data.
+    let replicaLag: Double
+
     func hasAlert(maxConnections: Int) -> Bool {
-        // Ignore -1 (N/A) values in alert checks
-        let cpuAlert = cpuUtilization >= 0 && cpuUtilization > 50
-        let connAlert = connectionsUsedPercent >= 0 && connectionsUsedPercent > 50
-        let storageAlert = storageUsedPercent >= 0 && storageUsedPercent > 50
-        let activityAlert = maxConnections > 0 && (currentConnections / Double(maxConnections) * 100) > 50
-        
+        // Ignore -1 (N/A) values in alert checks. Threshold is user-configurable (default 50%).
+        let threshold = Settings.shared.alertThreshold
+        let cpuAlert = cpuUtilization >= 0 && cpuUtilization > threshold
+        let connAlert = connectionsUsedPercent >= 0 && connectionsUsedPercent > threshold
+        let storageAlert = storageUsedPercent >= 0 && storageUsedPercent > threshold
+        let activityAlert = maxConnections > 0 && (currentConnections / Double(maxConnections) * 100) > threshold
+
         return cpuAlert || connAlert || storageAlert || activityAlert
     }
-    
+
     func getAlertMessage(instanceName: String) -> String? {
+        let threshold = Settings.shared.alertThreshold
         var alerts: [String] = []
-        
-        if cpuUtilization >= 0 && cpuUtilization > 50 {
+
+        if cpuUtilization >= 0 && cpuUtilization > threshold {
             alerts.append("CPU: \(String(format: "%.0f", cpuUtilization))%")
         }
-        if connectionsUsedPercent >= 0 && connectionsUsedPercent > 50 {
+        if connectionsUsedPercent >= 0 && connectionsUsedPercent > threshold {
             alerts.append("Connections: \(String(format: "%.0f", connectionsUsedPercent))%")
         }
-        if storageUsedPercent >= 0 && storageUsedPercent > 50 {
+        if storageUsedPercent >= 0 && storageUsedPercent > threshold {
             alerts.append("Storage: \(String(format: "%.0f", storageUsedPercent))%")
         }
-        
+
         if alerts.isEmpty {
             return nil
         }
-        
+
         return "⚠️ RDS Alert: \(instanceName)\n\(alerts.joined(separator: "\n"))"
     }
 }
@@ -210,4 +221,30 @@ struct PerformanceInsightsData {
     let topHosts: [TopItem]
 
     static let disabled = PerformanceInsightsData(enabled: false, topQueries: [], topUsers: [], topHosts: [])
+}
+
+// MARK: - Events & alarms
+
+/// A recent RDS event (failover, restart, maintenance, etc.) for the detail window.
+struct RDSEvent: Identifiable {
+    let id = UUID()
+    let date: Date
+    let message: String
+    let categories: [String]
+}
+
+/// A CloudWatch alarm currently in the ALARM state for this instance.
+struct CloudWatchAlarmInfo: Identifiable {
+    let id = UUID()
+    let name: String
+    let reason: String
+    let metricName: String?
+}
+
+/// Recent events and active alarms shown in the detail window.
+struct InstanceActivity {
+    let events: [RDSEvent]
+    let alarms: [CloudWatchAlarmInfo]
+
+    static let empty = InstanceActivity(events: [], alarms: [])
 }

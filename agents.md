@@ -428,6 +428,7 @@ PulseBar/
     ├── AWSCredentialsReader.swift          # Credential parsing
     ├── RDSMonitoringService.swift          # AWS API integration (RDS, CloudWatch, PI)
     ├── AlertManager.swift                  # Notification logic
+    ├── Settings.swift                      # User preferences (threshold, interval)
     ├── DatabaseDetailWindowController.swift # Detail window + DetailViewModel
     ├── MetricsDashboardView.swift          # SwiftUI + Charts dashboard
     └── Models.swift                        # Data structures

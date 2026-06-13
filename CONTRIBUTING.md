@@ -124,6 +124,8 @@ aws_secret_access_key = YOUR_SECRET
 Required IAM permissions:
 - `rds:DescribeDBInstances`
 - `cloudwatch:GetMetricData`
+- `rds:DescribeEvents` (events panel)
+- `cloudwatch:DescribeAlarms` (alarms panel)
 - `pi:DescribeDimensionKeys` (optional — Performance Insights panels)
 
 ### 4. Build and Test

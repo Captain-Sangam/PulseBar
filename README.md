@@ -23,8 +23,12 @@
 - 📊 **At-a-glance Monitoring**: CPU, connections, sessions, and storage for every RDS instance, right in the menu bar
 - 📈 **Detail Dashboard**: Click any database for a popup with six time-series charts (CPU, Memory, Storage) over the last **1 day / 7 days / 30 days**
 - 🔍 **Performance Insights**: Top SQL queries, users, and hosts by average active sessions (when PI is enabled)
-- ⚡ **Auto-refresh**: Menu-bar metrics update every 15 minutes automatically
-- 🔔 **Smart Alerts**: macOS notifications when metrics exceed 50% (with deduplication), plus an always-visible in-menu alert banner
+- 🧬 **Replica Awareness**: Read replicas are nested under their primary, with replica lag
+- 🔔 **Events & Alarms**: Recent RDS events and active CloudWatch alarms in the detail window
+- 🔗 **Open in AWS Console**: One-click deep link to any instance in the RDS console
+- ⚡ **Auto-refresh**: Menu-bar metrics update automatically (configurable: 1–60 min)
+- 🔔 **Smart Alerts**: macOS notifications when metrics exceed a configurable threshold (default 50%), plus an always-visible in-menu alert banner
+- ⚙️ **Settings**: Adjust alert threshold and refresh interval from the menu
 - 🎨 **Color-coded Status**: Green (<50%), Yellow (50-75%), Red (>75%)
 - 🔐 **AWS Integration**: Uses your existing `~/.aws/credentials` and `~/.aws/config`
 - 🌍 **Multi-region/Profile**: Switch between AWS profiles and regions easily
@@ -56,6 +60,8 @@
 - IAM permissions:
   - `rds:DescribeDBInstances`
   - `cloudwatch:GetMetricData`
+  - `rds:DescribeEvents` *(for the events panel)*
+  - `cloudwatch:DescribeAlarms` *(for the alarms panel)*
   - `pi:DescribeDimensionKeys` *(optional — only for the Top Queries/Users/Hosts panels)*
 
 ## Installation
@@ -130,6 +136,8 @@ region = us-east-1
     "Action": [
       "rds:DescribeDBInstances",
       "cloudwatch:GetMetricData",
+      "rds:DescribeEvents",
+      "cloudwatch:DescribeAlarms",
       "pi:DescribeDimensionKeys"
     ],
     "Resource": "*"
@@ -137,7 +145,7 @@ region = us-east-1
 }
 ```
 
-> `pi:DescribeDimensionKeys` is only needed for the Performance Insights panels (Top Queries/Users/Hosts). PulseBar works without it — those panels simply show a "not enabled" notice.
+> Only `rds:DescribeDBInstances` and `cloudwatch:GetMetricData` are strictly required. `rds:DescribeEvents` and `cloudwatch:DescribeAlarms` power the events/alarms panel, and `pi:DescribeDimensionKeys` powers the Performance Insights panels — PulseBar degrades gracefully when any are missing.
 
 ## Usage
 
@@ -231,6 +239,7 @@ PulseBar/
 │   ├── AWSCredentialsReader.swift          # Reads ~/.aws files
 │   ├── RDSMonitoringService.swift          # AWS SDK integration (RDS, CloudWatch, PI)
 │   ├── AlertManager.swift                  # Notification logic
+│   ├── Settings.swift                      # User preferences (threshold, interval)
 │   ├── DatabaseDetailWindowController.swift # Detail window + view model
 │   ├── MetricsDashboardView.swift          # SwiftUI + Charts dashboard
 │   └── Models.swift                        # Data structures
@@ -374,9 +383,11 @@ For architecture and technical details, see [agents.md](agents.md).
 
 - [x] Historical metric graphs (detail dashboard)
 - [x] Performance Insights integration (top queries/users/hosts)
+- [x] Custom alert thresholds + configurable refresh interval
+- [x] Read-replica grouping with replica lag
+- [x] RDS events & CloudWatch alarms panel
+- [x] Open in AWS Console deep link
 - [ ] Parameter group querying for accurate `max_connections`
 - [ ] Multi-account support
-- [ ] Custom alert thresholds
 - [ ] Export charts to CSV/PNG
-- [ ] RDS events & CloudWatch alarms panel
 - [ ] Sparkline trends in menu

@@ -47,18 +47,19 @@ class AlertManager {
     
     private func getAlertingMetrics(metrics: RDSMetrics) -> Set<String> {
         var alerting = Set<String>()
-        
+        let threshold = Settings.shared.alertThreshold
+
         // Ignore -1 (N/A) values
-        if metrics.cpuUtilization >= 0 && metrics.cpuUtilization > 50 {
+        if metrics.cpuUtilization >= 0 && metrics.cpuUtilization > threshold {
             alerting.insert("cpu")
         }
-        if metrics.connectionsUsedPercent >= 0 && metrics.connectionsUsedPercent > 50 {
+        if metrics.connectionsUsedPercent >= 0 && metrics.connectionsUsedPercent > threshold {
             alerting.insert("connections")
         }
-        if metrics.storageUsedPercent >= 0 && metrics.storageUsedPercent > 50 {
+        if metrics.storageUsedPercent >= 0 && metrics.storageUsedPercent > threshold {
             alerting.insert("storage")
         }
-        
+
         return alerting
     }
     

@@ -7,6 +7,7 @@ import SwiftUI
 final class DetailViewModel: ObservableObject {
     @Published var series: InstanceTimeSeries?
     @Published var pi: PerformanceInsightsData?
+    @Published var activity: InstanceActivity?
     @Published var range: MetricRange = .day
     @Published var isLoading = false
     @Published var errorMessage: String?
@@ -79,10 +80,12 @@ final class DatabaseDetailWindowController: NSWindowController, NSWindowDelegate
             do {
                 async let series = service.fetchTimeSeries(instanceId: instance.identifier, range: range)
                 async let pi = service.fetchPerformanceInsights(instance: instance, range: range)
-                let (loadedSeries, loadedPI) = try await (series, pi)
+                async let activity = service.fetchInstanceActivity(instanceId: instance.identifier)
+                let (loadedSeries, loadedPI, loadedActivity) = try await (series, pi, activity)
                 await MainActor.run {
                     self.model.series = loadedSeries
                     self.model.pi = loadedPI
+                    self.model.activity = loadedActivity
                     self.model.isLoading = false
                 }
             } catch {

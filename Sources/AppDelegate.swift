@@ -83,7 +83,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         let refreshItem = NSMenuItem(title: "🔄 Refresh Now", action: #selector(refreshData), keyEquivalent: "r")
         refreshItem.target = self
         menu.addItem(refreshItem)
-        
+
+        // Settings submenu (alert threshold + refresh interval)
+        menu.addItem(buildSettingsMenuItem())
+
         menu.addItem(NSMenuItem.separator())
 
         // Alert banner — a guaranteed-visible signal that surfaces breaching instances even
@@ -161,10 +164,27 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             }
             
         case .loaded:
-            for instance in monitoringService.instances {
+            // Group read replicas under their source instance. Replicas whose source isn't in
+            // the list (e.g. cross-region) are shown as top-level instances.
+            let instances = monitoringService.instances
+            let identifiers = Set(instances.map { $0.identifier })
+            let replicasBySource = Dictionary(grouping: instances.filter {
+                if let src = $0.readReplicaSource { return identifiers.contains(src) }
+                return false
+            }, by: { $0.readReplicaSource! })
+
+            for instance in instances {
+                // Skip replicas here; they're rendered nested under their primary below.
+                if let src = instance.readReplicaSource, identifiers.contains(src) { continue }
+
                 let metrics = monitoringService.getMetrics(for: instance.identifier)
-                let menuItem = createInstanceMenuItem(instance: instance, metrics: metrics)
-                menu.addItem(menuItem)
+                menu.addItem(createInstanceMenuItem(instance: instance, metrics: metrics))
+
+                // Nested replicas, indented under the primary.
+                for replica in replicasBySource[instance.identifier] ?? [] {
+                    let replicaMetrics = monitoringService.getMetrics(for: replica.identifier)
+                    menu.addItem(createInstanceMenuItem(instance: replica, metrics: replicaMetrics, isReplica: true))
+                }
             }
         }
         
@@ -188,12 +208,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(quitItem)
     }
     
-    func createInstanceMenuItem(instance: RDSInstance, metrics: RDSMetrics?) -> NSMenuItem {
+    func createInstanceMenuItem(instance: RDSInstance, metrics: RDSMetrics?, isReplica: Bool = false) -> NSMenuItem {
         let item = NSMenuItem()
-        
-        // Instance name as title
-        item.title = instance.identifier
-        
+
+        // Instance name as title. Replicas are indented and tagged so the hierarchy reads clearly.
+        item.title = isReplica ? "    ↳ \(instance.identifier)  (replica)" : instance.identifier
+
         // Create submenu with details
         let submenu = NSMenu()
         submenu.autoenablesItems = false
@@ -204,6 +224,12 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         detailItem.target = self
         detailItem.representedObject = instance.identifier
         submenu.addItem(detailItem)
+
+        // Open this instance in the AWS RDS console.
+        let consoleItem = NSMenuItem(title: "🔗 Open in AWS Console", action: #selector(openInConsole(_:)), keyEquivalent: "")
+        consoleItem.target = self
+        consoleItem.representedObject = instance.identifier
+        submenu.addItem(consoleItem)
 
         submenu.addItem(NSMenuItem.separator())
 
@@ -245,6 +271,11 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
             // Activity (raw connections)
             submenu.addItem(detailReadout("Activity: \(Int(metrics.currentConnections)) connections"))
+
+            // Replica lag — shown only for read replicas reporting lag data.
+            if isReplica && metrics.replicaLag >= 0 {
+                submenu.addItem(detailReadout("Replica lag: \(String(format: "%.1f", metrics.replicaLag))s"))
+            }
         } else {
             let loadingItem = NSMenuItem(title: "Loading metrics...", action: nil, keyEquivalent: "")
             loadingItem.isEnabled = false
@@ -325,6 +356,54 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
+    func buildSettingsMenuItem() -> NSMenuItem {
+        let settingsMenu = NSMenu()
+
+        // Alert threshold
+        let thresholdHeader = NSMenuItem(title: "Alert threshold", action: nil, keyEquivalent: "")
+        thresholdHeader.isEnabled = false
+        settingsMenu.addItem(thresholdHeader)
+        for option in Settings.thresholdOptions {
+            let item = NSMenuItem(title: "   \(Int(option))%", action: #selector(selectThreshold(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = option
+            item.state = (option == Settings.shared.alertThreshold) ? .on : .off
+            settingsMenu.addItem(item)
+        }
+
+        settingsMenu.addItem(NSMenuItem.separator())
+
+        // Refresh interval
+        let intervalHeader = NSMenuItem(title: "Refresh interval", action: nil, keyEquivalent: "")
+        intervalHeader.isEnabled = false
+        settingsMenu.addItem(intervalHeader)
+        for minutes in Settings.intervalOptions {
+            let label = minutes == 1 ? "   1 minute" : "   \(minutes) minutes"
+            let item = NSMenuItem(title: label, action: #selector(selectInterval(_:)), keyEquivalent: "")
+            item.target = self
+            item.representedObject = minutes
+            item.state = (minutes == Settings.shared.refreshIntervalMinutes) ? .on : .off
+            settingsMenu.addItem(item)
+        }
+
+        let settingsItem = NSMenuItem(title: "⚙️ Settings", action: nil, keyEquivalent: "")
+        settingsItem.submenu = settingsMenu
+        return settingsItem
+    }
+
+    @objc func selectThreshold(_ sender: NSMenuItem) {
+        guard let value = sender.representedObject as? Double else { return }
+        Settings.shared.alertThreshold = value
+        updateMenu()  // refresh checkmarks + alert banner
+    }
+
+    @objc func selectInterval(_ sender: NSMenuItem) {
+        guard let minutes = sender.representedObject as? Int else { return }
+        Settings.shared.refreshIntervalMinutes = minutes
+        startAutoRefresh()  // restart timer with new interval
+        updateMenu()
+    }
+
     @objc func openDetail(_ sender: NSMenuItem) {
         guard let identifier = sender.representedObject as? String,
               let instance = monitoringService.instance(for: identifier) else {
@@ -343,6 +422,16 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
         detailWindows[identifier] = controller
         controller.present()
+    }
+
+    @objc func openInConsole(_ sender: NSMenuItem) {
+        guard let identifier = sender.representedObject as? String else { return }
+        let region = monitoringService.currentRegion
+        // RDS console deep link to the instance's detail page.
+        let urlString = "https://\(region).console.aws.amazon.com/rds/home?region=\(region)#database:id=\(identifier);is-cluster=false"
+        if let url = URL(string: urlString) {
+            NSWorkspace.shared.open(url)
+        }
     }
 
     @objc func selectProfile(_ sender: NSMenuItem) {
@@ -365,8 +454,10 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     }
     
     func startAutoRefresh() {
-        // Refresh every 15 minutes (900 seconds)
-        refreshTimer = Timer.scheduledTimer(withTimeInterval: 900, repeats: true) { [weak self] _ in
+        // Refresh on the user-configured interval (default 15 minutes).
+        refreshTimer?.invalidate()
+        let interval = Settings.shared.refreshIntervalSeconds
+        refreshTimer = Timer.scheduledTimer(withTimeInterval: interval, repeats: true) { [weak self] _ in
             self?.refreshData()
         }
     }
