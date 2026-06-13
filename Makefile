@@ -16,9 +16,9 @@ install: build
 	@mkdir -p build/PulseBar.app/Contents/Resources
 	@cp .build/release/PulseBar build/PulseBar.app/Contents/MacOS/
 	@cp Info.plist build/PulseBar.app/Contents/
-	@cp icons/16-mac.png build/PulseBar.app/Contents/Resources/MenuBarIcon.png
-	@cp icons/32-mac.png build/PulseBar.app/Contents/Resources/MenuBarIcon@2x.png
-	@cp icons/128-mac.png build/PulseBar.app/Contents/Resources/AppIcon.png
+	@# The menu-bar icon is drawn from an SF Symbol at runtime — no bundled asset needed.
+	@# The files in Icons/ are WebP-encoded, so re-encode to real PNG for the Dock/app icon.
+	@sips -s format png Icons/128-mac.png --out build/PulseBar.app/Contents/Resources/AppIcon.png >/dev/null
 	@cp -r build/PulseBar.app /Applications/
 	@echo "Installation complete!"
 

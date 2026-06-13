@@ -27,9 +27,11 @@
 - [ ] Tested profile switching
 - [ ] Tested region switching
 - [ ] Tested manual refresh
-- [ ] Tested auto-refresh (15 min timer)
-- [ ] Tested notification system
-- [ ] Tested with multiple RDS instances
+- [ ] Tested auto-refresh timer
+- [ ] Tested notification system / alert banner
+- [ ] Tested detail dashboard (charts, 1D/7D/30D, Performance Insights)
+- [ ] Tested events & alarms panel
+- [ ] Tested with multiple RDS instances (incl. read replicas if applicable)
 - [ ] Tested menu bar UI
 - [ ] Built successfully in release mode
 

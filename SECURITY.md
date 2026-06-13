@@ -65,12 +65,17 @@ PulseBar only requires these read-only permissions:
     "Effect": "Allow",
     "Action": [
       "rds:DescribeDBInstances",
-      "cloudwatch:GetMetricData"
+      "cloudwatch:GetMetricData",
+      "rds:DescribeEvents",
+      "cloudwatch:DescribeAlarms",
+      "pi:DescribeDimensionKeys"
     ],
     "Resource": "*"
   }]
 }
 ```
+
+All permissions are read-only. Only the first two are required; `rds:DescribeEvents` / `cloudwatch:DescribeAlarms` power the events & alarms panel and `pi:DescribeDimensionKeys` powers the Performance Insights panels — omit any you don't use.
 
 ### Data Handling
 
