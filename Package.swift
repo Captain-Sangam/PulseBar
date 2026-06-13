@@ -14,7 +14,8 @@ let package = Package(
             name: "PulseBar",
             dependencies: [
                 .product(name: "AWSRDS", package: "aws-sdk-swift"),
-                .product(name: "AWSCloudWatch", package: "aws-sdk-swift")
+                .product(name: "AWSCloudWatch", package: "aws-sdk-swift"),
+                .product(name: "AWSPI", package: "aws-sdk-swift")
             ],
             path: "Sources"
         )

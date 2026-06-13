@@ -1,4 +1,5 @@
 import Foundation
+import AppKit
 import UserNotifications
 
 class AlertManager {
@@ -62,29 +63,42 @@ class AlertManager {
     }
     
     private func sendNotification(message: String) {
-        // Always log the alert to console
+        // Always log the alert to console.
         print("🚨 ALERT: \(message)")
-        
-        // Only try to send system notification if running as bundled app
-        guard notificationsAvailable else {
-            return
-        }
-        
-        let content = UNMutableNotificationContent()
-        content.title = "PulseBar - RDS Alert"
-        content.body = message
-        content.sound = .default
-        
-        let request = UNNotificationRequest(
-            identifier: UUID().uuidString,
-            content: content,
-            trigger: nil // Send immediately
-        )
-        
-        UNUserNotificationCenter.current().add(request) { error in
-            if let error = error {
-                print("Error sending notification: \(error)")
+
+        // Preferred path: UNUserNotificationCenter, which requires a code-signed app bundle
+        // with a valid bundle identifier. When that's unavailable (e.g. `swift run`, or an
+        // unsigned local build), fall back to NSUserNotification so alerts still surface.
+        if notificationsAvailable {
+            let content = UNMutableNotificationContent()
+            content.title = "PulseBar - RDS Alert"
+            content.body = message
+            content.sound = .default
+
+            let request = UNNotificationRequest(
+                identifier: UUID().uuidString,
+                content: content,
+                trigger: nil // Send immediately
+            )
+
+            UNUserNotificationCenter.current().add(request) { [weak self] error in
+                if let error = error {
+                    print("UNUserNotificationCenter failed (\(error)); falling back.")
+                    self?.sendLegacyNotification(message: message)
+                }
             }
+        } else {
+            sendLegacyNotification(message: message)
         }
+    }
+
+    /// Fallback delivery via the older NSUserNotification API, which works without a
+    /// notification entitlement or code signature — so alerts appear even for local builds.
+    private func sendLegacyNotification(message: String) {
+        let notification = NSUserNotification()
+        notification.title = "PulseBar - RDS Alert"
+        notification.informativeText = message
+        notification.soundName = NSUserNotificationDefaultSoundName
+        NSUserNotificationCenter.default.deliver(notification)
     }
 }

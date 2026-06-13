@@ -83,20 +83,39 @@ region = us-east-1
 
 #### CloudWatch Metrics (per instance)
 
-| Metric | CloudWatch Name | Statistic | Period | Notes |
-|--------|----------------|-----------|--------|-------|
-| CPU % | `CPUUtilization` | Average | 300s | Direct display |
-| Connections | `DatabaseConnections` | Average | 300s | Activity + % calculation |
-| Free Storage | `FreeStorageSpace` | Average | **3600s** | Needs longer period for reliable data |
+| Metric       | CloudWatch Name       | Statistic | Period    | Notes                                          |
+| ------------ | --------------------- | --------- | --------- | ---------------------------------------------- |
+| CPU %        | `CPUUtilization`      | Average   | 300s      | Direct display                                 |
+| Connections  | `DatabaseConnections` | Average   | 300s      | Activity + % calculation                       |
+| Sessions     | `DBLoad`              | Average   | 300s      | Avg active sessions; `-1`/N/A when PI disabled |
+| Free Storage | `FreeStorageSpace`    | Average   | **3600s** | Needs longer period for reliable data          |
 
 **Important**: Storage metric uses a 1-hour period because CloudWatch may not report FreeStorageSpace every 5 minutes for all instances.
 
+`DBLoad` only reports when Performance Insights is enabled on the instance; when it returns no datapoint the value is `-1` and the menu's Sessions row falls back to the raw connection count.
+
+#### Detail dashboard (per instance, on demand)
+
+Opened via **📊 Open Details…** in an instance's submenu. Fetches time-series over a selectable
+range (1D → 300s, 7D → 3600s, 30D → 21600s period) in a single `GetMetricData` call, plus
+Performance Insights breakdowns. Charts are grouped CPU / Memory / Storage:
+
+| Group   | Charts                                                       |
+| ------- | ------------------------------------------------------------ |
+| CPU     | `CPUUtilization` (Percent), `DBLoad` (Count)                 |
+| Memory  | `FreeableMemory` (Bytes→GB), `SwapUsage` (Bytes→MB)          |
+| Storage | `FreeStorageSpace` (Bytes→GB), `ReadIOPS` + `WriteIOPS` (/s) |
+
+Performance Insights panels (Top Queries / Users / Hosts) use `pi:DescribeDimensionKeys` with
+`metric: db.load.avg`, grouped by `db.sql_tokenized`, `db.user`, and `db.host`. PI `StartTime` is
+clamped to the last 7 days (an API constraint), and the panels are skipped entirely when PI is off.
+
 #### Derived Metrics
 
-| Metric | Formula | Description |
-|--------|---------|-------------|
-| Connections Used % | `(DatabaseConnections / max_connections) × 100` | Percentage of connection pool used |
-| Storage Used % | `((AllocatedStorage × 1024³) - FreeStorageSpace) / (AllocatedStorage × 1024³) × 100` | Percentage of disk space used |
+| Metric             | Formula                                                                              | Description                        |
+| ------------------ | ------------------------------------------------------------------------------------ | ---------------------------------- |
+| Connections Used % | `(DatabaseConnections / max_connections) × 100`                                      | Percentage of connection pool used |
+| Storage Used %     | `((AllocatedStorage × 1024³) - FreeStorageSpace) / (AllocatedStorage × 1024³) × 100` | Percentage of disk space used      |
 
 **Notes:**
 - `AllocatedStorage` is in GiB, `FreeStorageSpace` is in bytes
@@ -215,14 +234,15 @@ Quit (⌘Q)
 
 ### Technology Stack
 
-| Component | Technology | Version | Purpose |
-|-----------|-----------|---------|---------|
-| Language | Swift | 5.9+ | Native macOS development |
-| Platform | macOS | 13.0+ | Menu bar app capabilities |
-| Package Manager | Swift Package Manager | - | Dependency management |
-| AWS SDK | aws-sdk-swift | 0.40.0+ | Official AWS integration |
-| UI Framework | AppKit | - | Native macOS UI |
-| Notifications | UserNotifications | - | Native notification system |
+| Component       | Technology            | Version | Purpose                          |
+| --------------- | --------------------- | ------- | -------------------------------- |
+| Language        | Swift                 | 5.9+    | Native macOS development         |
+| Platform        | macOS                 | 13.0+   | Menu bar app capabilities        |
+| Package Manager | Swift Package Manager | -       | Dependency management            |
+| AWS SDK         | aws-sdk-swift         | 0.40.0+ | Official AWS integration         |
+| UI Framework    | AppKit                | -       | Native menu-bar UI               |
+| Charts UI       | SwiftUI + Charts      | -       | Detail dashboard (via NSHostingView) |
+| Notifications   | UserNotifications     | -       | Native notification system       |
 
 ### Dependencies
 
@@ -233,11 +253,15 @@ Quit (⌘Q)
 // Products used:
 - AWSRDS (RDS API client)
 - AWSCloudWatch (CloudWatch API client)
+- AWSPI (Performance Insights API client)
 
 // Implicit dependencies from AWS SDK:
 - ClientRuntime
 - AWSClientRuntime
 - AwsCommonRuntimeKit
+
+// System frameworks (no SPM dependency; macOS 13+):
+- SwiftUI, Charts  (detail dashboard, bridged into AppKit with NSHostingView)
 ```
 
 ### AWS SDK Type Namespacing
@@ -388,9 +412,10 @@ PulseBar/
 ├── .gitignore                    # Git ignore rules
 ├── Assets/
 │   └── screenshot.png            # App screenshot for README
-├── icons/
-│   └── *.png                     # App icons (16px to 1024px)
+├── Icons/
+│   └── *.png                     # App icons (16px to 1024px; WebP-encoded)
 ├── .github/
+│   ├── ISSUE_TEMPLATE/           # Bug report & feature request templates
 │   ├── PULL_REQUEST_TEMPLATE.md  # PR template
 │   └── workflows/
 │       ├── pr-validation.yml     # CI for pull requests
@@ -398,12 +423,14 @@ PulseBar/
 ├── build/                        # Built app bundle (gitignored)
 │   └── PulseBar.app/
 └── Sources/
-    ├── main.swift               # Entry point
-    ├── AppDelegate.swift        # UI & app lifecycle
-    ├── AWSCredentialsReader.swift   # Credential parsing
-    ├── RDSMonitoringService.swift   # AWS API integration
-    ├── AlertManager.swift           # Notification logic
-    └── Models.swift                 # Data structures
+    ├── main.swift                          # Entry point
+    ├── AppDelegate.swift                   # UI & app lifecycle
+    ├── AWSCredentialsReader.swift          # Credential parsing
+    ├── RDSMonitoringService.swift          # AWS API integration (RDS, CloudWatch, PI)
+    ├── AlertManager.swift                  # Notification logic
+    ├── DatabaseDetailWindowController.swift # Detail window + DetailViewModel
+    ├── MetricsDashboardView.swift          # SwiftUI + Charts dashboard
+    └── Models.swift                        # Data structures
 ```
 
 ### Component Responsibilities
@@ -481,15 +508,18 @@ PulseBar/
 - **Responsibilities**:
   - Track alert state per instance
   - Implement deduplication logic
-  - Check for bundle availability
-  - Send macOS notifications (when bundled)
+  - Send macOS notifications via `UNUserNotificationCenter` when bundled, falling back to the
+    legacy `NSUserNotification` path for unsigned/local builds
   - Always log alerts to console
   - Clear alerts when recovered
 - **Key Methods**:
   - `sendAlert()` - Evaluate and send notification
   - `clearAlert()` - Remove alert state
-  - `sendNotification()` - Wrapper for UNNotification
+  - `sendNotification()` - Deliver via UNUserNotificationCenter, with legacy fallback
+  - `sendLegacyNotification()` - NSUserNotification fallback (no entitlement required)
   - `getAlertingMetrics()` - Convert metrics to alerting set (ignores -1)
+- **Note**: `RDSMonitoringService.alertingInstances()` surfaces breaching instances in the menu
+  banner so alerts remain visible even when OS notifications are blocked.
 - **State**:
   - `activeAlerts: [String: AlertState]` - Current alerts by instance ID
   - `notificationsAvailable: Bool` - True if Bundle.main.bundleIdentifier != nil
@@ -498,10 +528,14 @@ PulseBar/
 - **Purpose**: Data structures and state management
 - **Enums**:
   - `MonitoringState` - Current state of the monitoring service
+  - `MetricRange` - 1D / 7D / 30D window for the detail dashboard (seconds + period)
+  - `MetricUnit` - how a series is formatted (percent, bytes→GB/MB, count, /s)
 - **Structures**:
-  - `RDSInstance` - RDS instance metadata
-  - `RDSMetrics` - Collected and calculated metrics
+  - `RDSInstance` - RDS instance metadata (incl. `dbiResourceId`, `performanceInsightsEnabled`)
+  - `RDSMetrics` - Collected and calculated menu metrics (incl. `dbLoad`)
   - `AlertState` - Alert tracking state
+  - `MetricPoint` / `MetricSeries` / `InstanceTimeSeries` - dashboard time-series
+  - `TopItem` / `PerformanceInsightsData` - Performance Insights breakdowns
 - **Methods**:
   - `RDSMetrics.hasAlert()` - Check if any threshold breached (ignores -1)
   - `RDSMetrics.getAlertMessage()` - Format notification message (ignores -1)
@@ -816,26 +850,31 @@ GitHub Actions workflows in `.github/workflows/`:
 
 ### Key Files for Common Tasks
 
-| Task | Primary File(s) | Method(s) |
-|------|----------------|-----------|
-| Add new metric | `RDSMonitoringService.swift`, `Models.swift` | `fetchInstanceMetrics()`, `RDSMetrics` struct |
-| Change UI layout | `AppDelegate.swift` | `updateMenu()`, `createInstanceMenuItem()` |
-| Modify alert logic | `AlertManager.swift`, `Models.swift` | `sendAlert()`, `hasAlert()`, `getAlertingMetrics()` |
-| Add AWS profile support | `AWSCredentialsReader.swift` | `getCredentials()`, `listProfiles()` |
-| Change refresh interval | `AppDelegate.swift` | `startAutoRefresh()` (currently 900s) |
-| Change default region | `RDSMonitoringService.swift` | `currentRegion` property |
-| Adjust time window | `RDSMonitoringService.swift` | `fetchMetrics()` - `startTime` calculation |
+| Task                     | Primary File(s)                              | Method(s)                                              |
+| ------------------------ | -------------------------------------------- | ------------------------------------------------------ |
+| Add new menu metric      | `RDSMonitoringService.swift`, `Models.swift` | `fetchInstanceMetrics()`, `RDSMetrics` struct          |
+| Add/change dashboard chart | `RDSMonitoringService.swift`, `MetricsDashboardView.swift` | `fetchTimeSeries()`, `InstanceTimeSeries`, chart group |
+| Change Performance Insights panels | `RDSMonitoringService.swift`, `MetricsDashboardView.swift` | `fetchPerformanceInsights()`, `TopPanel`     |
+| Change menu UI layout    | `AppDelegate.swift`                          | `updateMenu()`, `createInstanceMenuItem()`             |
+| Change detail window      | `DatabaseDetailWindowController.swift`       | `init`, `reload(range:)`, `present()`                  |
+| Modify alert logic       | `AlertManager.swift`, `Models.swift`         | `sendAlert()`, `hasAlert()`, `getAlertingMetrics()`    |
+| Add AWS profile support  | `AWSCredentialsReader.swift`                 | `getCredentials()`, `listProfiles()`                   |
+| Change refresh interval  | `AppDelegate.swift`                          | `startAutoRefresh()` (currently 900s)                  |
+| Change default region    | `RDSMonitoringService.swift`                 | `currentRegion` property                               |
+| Change menu-bar icon     | `AppDelegate.swift`                          | `applicationDidFinishLaunching` (SF Symbol)            |
 
 ### Important Constants
 
-| Constant | Value | Location | Description |
-|----------|-------|----------|-------------|
-| Refresh interval | 900s (15 min) | AppDelegate | Auto-refresh timer |
-| CloudWatch window | 3600s (1 hour) | RDSMonitoringService | Time range for metrics |
-| CPU/Conn period | 300s (5 min) | RDSMonitoringService | CloudWatch aggregation |
-| Storage period | 3600s (1 hour) | RDSMonitoringService | Longer for reliability |
-| Alert threshold | 50% | Models.swift | All metrics |
-| Default region | us-west-2 | RDSMonitoringService | Initial region |
+| Constant          | Value             | Location             | Description                          |
+| ----------------- | ----------------- | -------------------- | ------------------------------------ |
+| Refresh interval  | 900s (15 min)     | AppDelegate          | Auto-refresh timer                   |
+| CloudWatch window | 3600s (1 hour)    | RDSMonitoringService | Time range for menu metrics          |
+| CPU/Conn period   | 300s (5 min)      | RDSMonitoringService | CloudWatch aggregation               |
+| Storage period    | 3600s (1 hour)    | RDSMonitoringService | Longer for reliability               |
+| Dashboard periods | 300/3600/21600s   | Models (MetricRange) | 1D / 7D / 30D chart aggregation      |
+| PI window cap     | 7 days            | RDSMonitoringService | Performance Insights StartTime limit |
+| Alert threshold   | 50%               | Models.swift         | All metrics                          |
+| Default region    | us-west-2         | RDSMonitoringService | Initial region                       |
 
 ---
 

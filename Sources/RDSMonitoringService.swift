@@ -1,6 +1,7 @@
 import Foundation
 import AWSRDS
 import AWSCloudWatch
+import AWSPI
 import ClientRuntime
 import AWSClientRuntime
 import AwsCommonRuntimeKit
@@ -99,18 +100,20 @@ class RDSMonitoringService {
                 }
                 
                 let allocatedStorage = Int(db.allocatedStorage ?? 0)
-                
+
                 // Estimate max connections based on instance class
                 // This is a simplified estimation - in production, you'd query parameter groups
                 let maxConnections = estimateMaxConnections(instanceClass: instanceClass)
-                
+
                 let instance = RDSInstance(
                     identifier: identifier,
                     engine: engine,
                     instanceClass: instanceClass,
                     allocatedStorage: allocatedStorage,
                     maxConnections: maxConnections,
-                    status: status
+                    status: status,
+                    dbiResourceId: db.dbiResourceId,
+                    performanceInsightsEnabled: db.performanceInsightsEnabled ?? false
                 )
                 
                 newInstances.append(instance)
@@ -200,7 +203,23 @@ class RDSMonitoringService {
                 stat: "Average"
             )
         ))
-        
+
+        // DB Load (average active sessions) — only reports when Performance Insights is enabled.
+        queries.append(CloudWatchClientTypes.MetricDataQuery(
+            id: "dbload",
+            metricStat: CloudWatchClientTypes.MetricStat(
+                metric: CloudWatchClientTypes.Metric(
+                    dimensions: [
+                        CloudWatchClientTypes.Dimension(name: "DBInstanceIdentifier", value: instanceId)
+                    ],
+                    metricName: "DBLoad",
+                    namespace: "AWS/RDS"
+                ),
+                period: 300,
+                stat: "Average"
+            )
+        ))
+
         let input = GetMetricDataInput(
             endTime: endTime,
             metricDataQueries: queries,
@@ -213,15 +232,16 @@ class RDSMonitoringService {
         var cpuUtilization: Double = 0
         var currentConnections: Double = 0
         var freeStorageSpace: Double = 0
-        
+        var dbLoad: Double = -1  // -1 = N/A (Performance Insights disabled / no datapoint)
+
         // Parse CloudWatch response
-        
+
         if let results = response.metricDataResults {
             for result in results {
                 if let values = result.values, !values.isEmpty {
                     // Use the FIRST value (most recent) - CloudWatch returns newest first
                     let value = values[0]
-                    
+
                     switch result.id {
                     case "cpu":
                         cpuUtilization = value
@@ -229,6 +249,8 @@ class RDSMonitoringService {
                         currentConnections = value
                     case "storage":
                         freeStorageSpace = value
+                    case "dbload":
+                        dbLoad = value
                     default:
                         break
                     }
@@ -262,7 +284,8 @@ class RDSMonitoringService {
             currentConnections: currentConnections,
             connectionsUsedPercent: max(0, min(100, connectionsUsedPercent)),
             storageUsedPercent: storageUsedPercent == -1 ? -1 : max(0, min(100, storageUsedPercent)),
-            freeStorageSpace: freeStorageSpace
+            freeStorageSpace: freeStorageSpace,
+            dbLoad: dbLoad
         )
     }
     
@@ -285,6 +308,152 @@ class RDSMonitoringService {
     
     func getMetrics(for instanceId: String) -> RDSMetrics? {
         return metricsCache[instanceId]
+    }
+
+    /// Instances whose metrics currently breach the alert threshold, with a short reason string.
+    /// Surfaced in the menu so alerts are visible even when OS notifications are suppressed.
+    func alertingInstances() -> [(instance: RDSInstance, reason: String)] {
+        instances.compactMap { instance in
+            guard let metrics = metricsCache[instance.identifier],
+                  metrics.hasAlert(maxConnections: instance.maxConnections),
+                  let message = metrics.getAlertMessage(instanceName: instance.identifier) else {
+                return nil
+            }
+            // getAlertMessage prefixes a header line; keep just the metric lines for a compact reason.
+            let reason = message
+                .split(separator: "\n")
+                .dropFirst()
+                .joined(separator: ", ")
+            return (instance, reason)
+        }
+    }
+
+    func instance(for instanceId: String) -> RDSInstance? {
+        return instances.first { $0.identifier == instanceId }
+    }
+
+    // MARK: - Detail dashboard time-series
+
+    /// Fetches the six dashboard metrics as time-series for a single instance over the given range.
+    /// Issues one GetMetricData call covering all metrics; empty series are returned for metrics
+    /// with no datapoints (e.g. DBLoad when Performance Insights is disabled).
+    func fetchTimeSeries(instanceId: String, range: MetricRange) async throws -> InstanceTimeSeries {
+        let client = try await createCloudWatchClient()
+        let now = Date()
+        let startTime = now.addingTimeInterval(-range.seconds)
+        let period = range.period
+
+        func metricQuery(_ id: String, _ metricName: String) -> CloudWatchClientTypes.MetricDataQuery {
+            CloudWatchClientTypes.MetricDataQuery(
+                id: id,
+                metricStat: CloudWatchClientTypes.MetricStat(
+                    metric: CloudWatchClientTypes.Metric(
+                        dimensions: [
+                            CloudWatchClientTypes.Dimension(name: "DBInstanceIdentifier", value: instanceId)
+                        ],
+                        metricName: metricName,
+                        namespace: "AWS/RDS"
+                    ),
+                    period: period,
+                    stat: "Average"
+                )
+            )
+        }
+
+        let queries: [CloudWatchClientTypes.MetricDataQuery] = [
+            metricQuery("cpu", "CPUUtilization"),
+            metricQuery("dbload", "DBLoad"),
+            metricQuery("memfree", "FreeableMemory"),
+            metricQuery("swap", "SwapUsage"),
+            metricQuery("storage", "FreeStorageSpace"),
+            metricQuery("riops", "ReadIOPS"),
+            metricQuery("wiops", "WriteIOPS")
+        ]
+
+        let input = GetMetricDataInput(
+            endTime: now,
+            // Ask CloudWatch for oldest-first so the chart X axis reads left-to-right.
+            metricDataQueries: queries,
+            scanBy: .timestampAscending,
+            startTime: startTime
+        )
+
+        let response = try await client.getMetricData(input: input)
+
+        // Map query id -> ascending [MetricPoint]
+        var pointsById: [String: [MetricPoint]] = [:]
+        if let results = response.metricDataResults {
+            for result in results {
+                guard let id = result.id,
+                      let timestamps = result.timestamps,
+                      let values = result.values else { continue }
+                let paired = zip(timestamps, values).map { MetricPoint(timestamp: $0, value: $1) }
+                pointsById[id] = paired.sorted { $0.timestamp < $1.timestamp }
+            }
+        }
+
+        func series(_ id: String, _ name: String, _ unit: MetricUnit) -> MetricSeries {
+            MetricSeries(displayName: name, unit: unit, points: pointsById[id] ?? [])
+        }
+
+        return InstanceTimeSeries(
+            cpuUtilization: series("cpu", "CPU Utilization", .percent),
+            dbLoad: series("dbload", "Avg Active Sessions", .count),
+            freeableMemory: series("memfree", "Freeable Memory", .bytesToGB),
+            swapUsage: series("swap", "Swap Usage", .bytesToMB),
+            freeStorageSpace: series("storage", "Free Storage", .bytesToGB),
+            readIOPS: series("riops", "Read IOPS", .countPerSec),
+            writeIOPS: series("wiops", "Write IOPS", .countPerSec)
+        )
+    }
+
+    // MARK: - Performance Insights
+
+    /// Fetches Top Queries / Users / Hosts by average active sessions from Performance Insights.
+    /// Returns `.disabled` without any AWS calls when PI is off or the resource id is unknown.
+    func fetchPerformanceInsights(instance: RDSInstance, range: MetricRange) async throws -> PerformanceInsightsData {
+        guard instance.performanceInsightsEnabled, let resourceId = instance.dbiResourceId else {
+            return .disabled
+        }
+
+        let client = try await createPIClient()
+        let now = Date()
+        // Performance Insights only retains StartTime within the past 7 days.
+        let window = min(range.seconds, 604_800)
+        let startTime = now.addingTimeInterval(-window)
+
+        func topItems(groupName: String, dimensionKey: String) async -> [TopItem] {
+            let input = DescribeDimensionKeysInput(
+                endTime: now,
+                groupBy: PIClientTypes.DimensionGroup(group: groupName),
+                identifier: resourceId,
+                maxResults: 10,
+                metric: "db.load.avg",
+                serviceType: .rds,
+                startTime: startTime
+            )
+            do {
+                let response = try await client.describeDimensionKeys(input: input)
+                let keys = response.keys ?? []
+                return keys.compactMap { key -> TopItem? in
+                    let label = key.dimensions?[dimensionKey]
+                        ?? key.dimensions?.values.first
+                        ?? "(unknown)"
+                    return TopItem(label: label, load: key.total ?? 0)
+                }
+                .sorted { $0.load > $1.load }
+            } catch {
+                print("PI \(groupName) query failed: \(error)")
+                return []
+            }
+        }
+
+        // db.sql_tokenized groups by digest text; db.user and db.host break down by client.
+        let queries = await topItems(groupName: "db.sql_tokenized", dimensionKey: "db.sql_tokenized.statement")
+        let users = await topItems(groupName: "db.user", dimensionKey: "db.user.name")
+        let hosts = await topItems(groupName: "db.host", dimensionKey: "db.host.name")
+
+        return PerformanceInsightsData(enabled: true, topQueries: queries, topUsers: users, topHosts: hosts)
     }
     
     private func createRDSClient() async throws -> RDSClient {
@@ -324,7 +493,26 @@ class RDSMonitoringService {
         
         return CloudWatchClient(config: config)
     }
-    
+
+    private func createPIClient() async throws -> PIClient {
+        guard let credentials = AWSCredentialsReader.shared.getCredentials(profile: currentProfile) else {
+            throw NSError(domain: "PulseBar", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to load AWS credentials"])
+        }
+
+        let config = try await PIClient.PIClientConfiguration(
+            awsCredentialIdentityResolver: try StaticAWSCredentialIdentityResolver(
+                AWSCredentialIdentity(
+                    accessKey: credentials.accessKeyId,
+                    secret: credentials.secretAccessKey,
+                    sessionToken: credentials.sessionToken
+                )
+            ),
+            region: currentRegion
+        )
+
+        return PIClient(config: config)
+    }
+
     private func estimateMaxConnections(instanceClass: String) -> Int {
         // Simplified estimation based on instance class
         // In production, this should query the parameter group

@@ -1,0 +1,8 @@
+blank_issues_enabled: true
+contact_links:
+  - name: Question or discussion
+    url: https://github.com/Captain-Sangam/PulseBar/issues
+    about: Please open an issue for questions about using PulseBar.
+  - name: Security vulnerability
+    url: https://github.com/Captain-Sangam/PulseBar/security/advisories/new
+    about: Please report security vulnerabilities privately — see SECURITY.md.

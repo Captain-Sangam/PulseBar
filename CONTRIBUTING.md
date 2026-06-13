@@ -84,10 +84,10 @@ Look for issues labeled `good first issue` - these are great for newcomers!
 #### Areas We'd Love Help With
 
 - [ ] Parameter group querying for accurate `max_connections`
-- [ ] Historical metric graphs
-- [ ] Performance Insights integration
 - [ ] Multi-account support
 - [ ] Custom alert thresholds
+- [ ] Export charts to CSV/PNG
+- [ ] RDS events & CloudWatch alarms panel
 - [ ] Unit tests
 - [ ] UI improvements
 
@@ -124,6 +124,7 @@ aws_secret_access_key = YOUR_SECRET
 Required IAM permissions:
 - `rds:DescribeDBInstances`
 - `cloudwatch:GetMetricData`
+- `pi:DescribeDimensionKeys` (optional — Performance Insights panels)
 
 ### 4. Build and Test
 
@@ -321,7 +322,10 @@ refactor(alerts): extract deduplication logic to separate method
 - [ ] Color coding is correct
 - [ ] Refresh button works
 - [ ] Auto-refresh works (wait 15 minutes or modify timer)
-- [ ] Alerts trigger when metrics exceed 50% (requires `make install`)
+- [ ] Alerts trigger when metrics exceed 50% (notification and/or in-menu banner)
+- [ ] "Open Details…" opens the dashboard window
+- [ ] Charts render for 1D / 7D / 30D and the range toggle reloads
+- [ ] Performance Insights panels populate (or show the "not enabled" notice)
 
 ### Test Scenarios
 

@@ -6,6 +6,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     var menu: NSMenu!
     var monitoringService: RDSMonitoringService!
     var refreshTimer: Timer?
+    var detailWindows: [String: DatabaseDetailWindowController] = [:]
     
     func applicationDidFinishLaunching(_ notification: Notification) {
         // Request notification permissions (only works in bundled app)
@@ -14,14 +15,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         // Create status bar item
         statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         if let button = statusItem.button {
-            // Try to load icon from bundle resources
-            if let iconPath = Bundle.main.path(forResource: "MenuBarIcon", ofType: "png"),
-               let icon = NSImage(contentsOfFile: iconPath) {
-                icon.isTemplate = true  // Adapts to light/dark mode
-                icon.size = NSSize(width: 18, height: 18)
+            // Use an SF Symbol template image. This renders crisply at every scale, adapts to
+            // light/dark automatically, and works in every run mode (no bundled asset needed) —
+            // avoiding both the WebP-decode failure and the icon-path issues of the old approach.
+            if let icon = NSImage(systemSymbolName: "chart.bar.xaxis", accessibilityDescription: "PulseBar") {
+                icon.isTemplate = true
                 button.image = icon
             } else {
-                // Fallback to emoji when running outside bundle (swift run)
+                // Last-resort fallback for very old systems without the symbol.
                 button.title = "📊"
             }
             button.action = #selector(toggleMenu)
@@ -84,7 +85,24 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         menu.addItem(refreshItem)
         
         menu.addItem(NSMenuItem.separator())
-        
+
+        // Alert banner — a guaranteed-visible signal that surfaces breaching instances even
+        // when OS notifications are suppressed (unsigned build, denied permission, etc.).
+        if monitoringService.state == .loaded {
+            let alerting = monitoringService.alertingInstances()
+            if !alerting.isEmpty {
+                let header = NSMenuItem(title: "🚨 \(alerting.count) instance\(alerting.count == 1 ? "" : "s") need attention", action: nil, keyEquivalent: "")
+                header.isEnabled = false
+                menu.addItem(header)
+                for entry in alerting {
+                    let line = NSMenuItem(title: "   \(entry.instance.identifier): \(entry.reason)", action: nil, keyEquivalent: "")
+                    line.isEnabled = false
+                    menu.addItem(line)
+                }
+                menu.addItem(NSMenuItem.separator())
+            }
+        }
+
         // Display based on current state
         switch monitoringService.state {
         case .loading:
@@ -178,12 +196,22 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         
         // Create submenu with details
         let submenu = NSMenu()
-        
+        submenu.autoenablesItems = false
+
+        // Open the full monitoring dashboard. This is the actionable row (the parent item
+        // owns a submenu, so its own action would not fire reliably).
+        let detailItem = NSMenuItem(title: "📊 Open Details…", action: #selector(openDetail(_:)), keyEquivalent: "")
+        detailItem.target = self
+        detailItem.representedObject = instance.identifier
+        submenu.addItem(detailItem)
+
+        submenu.addItem(NSMenuItem.separator())
+
         // Engine and class info
         let infoItem = NSMenuItem(title: "\(instance.engine) - \(instance.instanceClass)", action: nil, keyEquivalent: "")
         infoItem.isEnabled = false
         submenu.addItem(infoItem)
-        
+
         submenu.addItem(NSMenuItem.separator())
         
         if let metrics = metrics {
@@ -194,15 +222,29 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             // Connections
             let connItem = createMetricMenuItem(label: "Connections", value: metrics.connectionsUsedPercent, unit: "%")
             submenu.addItem(connItem)
-            
+
             // Storage
             let storageItem = createMetricMenuItem(label: "Storage", value: metrics.storageUsedPercent, unit: "%")
             submenu.addItem(storageItem)
-            
+
+            // Informational readouts (no health status) grouped under their own header.
+            submenu.addItem(NSMenuItem.separator())
+            let detailsHeader = NSMenuItem(title: "Details", action: nil, keyEquivalent: "")
+            detailsHeader.isEnabled = false
+            submenu.addItem(detailsHeader)
+
+            // Sessions — average active sessions (DBLoad). Falls back to raw connection count
+            // when Performance Insights is disabled (dbLoad < 0).
+            let sessionsTitle: String
+            if metrics.dbLoad >= 0 {
+                sessionsTitle = "Sessions: \(String(format: "%.2f", metrics.dbLoad)) avg active"
+            } else {
+                sessionsTitle = "Sessions: \(Int(metrics.currentConnections)) connections"
+            }
+            submenu.addItem(detailReadout(sessionsTitle))
+
             // Activity (raw connections)
-            let activityItem = NSMenuItem(title: "Activity: \(Int(metrics.currentConnections)) connections", action: nil, keyEquivalent: "")
-            activityItem.isEnabled = false
-            submenu.addItem(activityItem)
+            submenu.addItem(detailReadout("Activity: \(Int(metrics.currentConnections)) connections"))
         } else {
             let loadingItem = NSMenuItem(title: "Loading metrics...", action: nil, keyEquivalent: "")
             loadingItem.isEnabled = false
@@ -232,27 +274,49 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     
     func createMetricMenuItem(label: String, value: Double, unit: String) -> NSMenuItem {
         let item = NSMenuItem()
-        
-        // Handle N/A case (value = -1)
+        item.isEnabled = false
+
+        // Handle N/A case (value = -1). Use a neutral gray dot so the row still aligns.
         if value < 0 {
-            item.title = "⚪ \(label): N/A"
-            item.isEnabled = false
+            item.title = "\(label): N/A"
+            item.image = statusDot(color: .systemGray)
             return item
         }
-        
+
         item.title = "\(label): \(String(format: "%.1f", value))\(unit)"
-        item.isEnabled = false
-        
-        // Color code
+
+        // Color code via a leading dot image (consistent width keeps every row aligned).
+        let color: NSColor
         if value > 75 {
-            item.title = "🔴 " + item.title
+            color = .systemRed
         } else if value > 50 {
-            item.title = "🟡 " + item.title
+            color = .systemYellow
         } else {
-            item.title = "🟢 " + item.title
+            color = .systemGreen
         }
-        
+        item.image = statusDot(color: color)
+
         return item
+    }
+
+    /// An informational, non-status submenu row (e.g. Sessions, Activity). Indented slightly so it
+    /// reads as a nested readout under the "Details" header rather than a health metric.
+    private func detailReadout(_ title: String) -> NSMenuItem {
+        let item = NSMenuItem(title: "   \(title)", action: nil, keyEquivalent: "")
+        item.isEnabled = false
+        return item
+    }
+
+    /// A small filled circle used as a menu item's leading image. Using an image (rather than an
+    /// emoji prefix) gives every metric row the same indent, so labels line up.
+    private func statusDot(color: NSColor) -> NSImage {
+        let size = NSSize(width: 10, height: 10)
+        let image = NSImage(size: size)
+        image.lockFocus()
+        color.setFill()
+        NSBezierPath(ovalIn: NSRect(x: 1, y: 1, width: 8, height: 8)).fill()
+        image.unlockFocus()
+        return image
     }
     
     @objc func toggleMenu() {
@@ -261,6 +325,26 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
     
+    @objc func openDetail(_ sender: NSMenuItem) {
+        guard let identifier = sender.representedObject as? String,
+              let instance = monitoringService.instance(for: identifier) else {
+            return
+        }
+
+        // Reuse an existing window for this instance if one is open; otherwise create it.
+        if let existing = detailWindows[identifier] {
+            existing.present()
+            return
+        }
+
+        let controller = DatabaseDetailWindowController(instance: instance, service: monitoringService)
+        controller.onClose = { [weak self] in
+            self?.detailWindows.removeValue(forKey: identifier)
+        }
+        detailWindows[identifier] = controller
+        controller.present()
+    }
+
     @objc func selectProfile(_ sender: NSMenuItem) {
         monitoringService.currentProfile = sender.title
         refreshData()

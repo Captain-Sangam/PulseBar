@@ -36,7 +36,7 @@ Automatically builds and attaches the app bundle to GitHub releases.
 3. Cache dependencies
 4. Resolve dependencies
 5. Build release binary
-6. Create `.app` bundle with icons
+6. Create `.app` bundle (re-encodes the Dock icon to PNG via `sips`; the menu-bar icon is an SF Symbol)
 7. Update version in Info.plist
 8. Verify app bundle
 9. Create ZIP archive

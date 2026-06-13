@@ -20,23 +20,33 @@
 
 ## Features
 
-- 📊 **Real-time Monitoring**: Track CPU, connections, storage, and activity for all RDS instances
-- ⚡ **Auto-refresh**: Updates every 15 minutes automatically
-- 🔔 **Smart Alerts**: macOS notifications when metrics exceed 50% (with deduplication)
+- 📊 **At-a-glance Monitoring**: CPU, connections, sessions, and storage for every RDS instance, right in the menu bar
+- 📈 **Detail Dashboard**: Click any database for a popup with six time-series charts (CPU, Memory, Storage) over the last **1 day / 7 days / 30 days**
+- 🔍 **Performance Insights**: Top SQL queries, users, and hosts by average active sessions (when PI is enabled)
+- ⚡ **Auto-refresh**: Menu-bar metrics update every 15 minutes automatically
+- 🔔 **Smart Alerts**: macOS notifications when metrics exceed 50% (with deduplication), plus an always-visible in-menu alert banner
 - 🎨 **Color-coded Status**: Green (<50%), Yellow (50-75%), Red (>75%)
 - 🔐 **AWS Integration**: Uses your existing `~/.aws/credentials` and `~/.aws/config`
 - 🌍 **Multi-region/Profile**: Switch between AWS profiles and regions easily
 
 ## Metrics Tracked
 
-For each RDS instance:
+**In the menu bar**, for each RDS instance:
 
-| Metric | Source | Description |
-|--------|--------|-------------|
-| **CPU Utilization** | CloudWatch `CPUUtilization` | Current CPU usage percentage |
-| **Connections Used** | `DatabaseConnections / max_connections × 100` | Percentage of connection pool used |
-| **Storage Used** | `(AllocatedStorage - FreeStorageSpace) / AllocatedStorage × 100` | Percentage of disk space used |
-| **Activity** | CloudWatch `DatabaseConnections` | Current number of database connections |
+| Metric          | Source                                                     | Description                          |
+| --------------- | ---------------------------------------------------------- | ------------------------------------ |
+| CPU Utilization | CloudWatch `CPUUtilization`                                | Current CPU usage percentage         |
+| Connections     | `DatabaseConnections / max_connections × 100`              | Percentage of connection pool used   |
+| Sessions        | CloudWatch `DBLoad` (falls back to `DatabaseConnections`)  | Average active sessions              |
+| Storage         | `(AllocatedStorage - FreeStorageSpace) / AllocatedStorage` | Percentage of disk space used        |
+
+**In the detail dashboard** (click a database), six charts grouped by type:
+
+| Group   | Charts                                          |
+| ------- | ----------------------------------------------- |
+| CPU     | `CPUUtilization`, `DBLoad` (avg active sessions) |
+| Memory  | `FreeableMemory`, `SwapUsage`                   |
+| Storage | `FreeStorageSpace`, `ReadIOPS` + `WriteIOPS`    |
 
 ## Requirements
 
@@ -46,6 +56,7 @@ For each RDS instance:
 - IAM permissions:
   - `rds:DescribeDBInstances`
   - `cloudwatch:GetMetricData`
+  - `pi:DescribeDimensionKeys` *(optional — only for the Top Queries/Users/Hosts panels)*
 
 ## Installation
 
@@ -118,20 +129,23 @@ region = us-east-1
     "Effect": "Allow",
     "Action": [
       "rds:DescribeDBInstances",
-      "cloudwatch:GetMetricData"
+      "cloudwatch:GetMetricData",
+      "pi:DescribeDimensionKeys"
     ],
     "Resource": "*"
   }]
 }
 ```
 
+> `pi:DescribeDimensionKeys` is only needed for the Performance Insights panels (Top Queries/Users/Hosts). PulseBar works without it — those panels simply show a "not enabled" notice.
+
 ## Usage
 
 1. Launch PulseBar from Applications or run `make run`
-2. Click the 📊 icon in your menu bar
+2. Click the chart icon in your menu bar
 3. Select your AWS profile and region
-4. View real-time metrics for all RDS instances
-5. Click on any instance to see detailed metrics
+4. View at-a-glance metrics for all RDS instances
+5. Hover an instance and choose **📊 Open Details…** to open the full dashboard with charts and Performance Insights
 
 ### Menu Options
 
@@ -145,9 +159,11 @@ region = us-east-1
 
 ```
 🟢 my-database-prod          # Green = all metrics healthy (<50%)
+   📊 Open Details…          # Opens the charts + Performance Insights dashboard
    postgres - db.r5.large    # Engine and instance class
    🟢 CPU: 12.5%             # CPU utilization
    🟢 Connections: 23.1%     # Connection pool usage
+   Sessions: 1.42 avg active # Average active sessions (DBLoad)
    🔴 Storage: 78.2%         # Storage used (red = >75%)
    Activity: 14 connections  # Raw connection count
 ```
@@ -181,7 +197,7 @@ CPU: 72%
 Connections: 61%
 ```
 
-> **Note**: Notifications only work when running as an installed app bundle (`make install`), not via `swift run`.
+> **Note**: System notifications are most reliable from an installed, signed app bundle (`make install`). For local builds, PulseBar falls back to a legacy notification path and always shows an **alert banner at the top of the menu**, so breaching instances are visible regardless of notification permissions.
 
 ## Architecture
 
@@ -192,13 +208,17 @@ Load AWS Profile/Credentials
    ↓
 DescribeDBInstances (RDS API)
    ↓
-GetMetricData (CloudWatch API) - 1 hour window
+GetMetricData (CloudWatch API) — latest scalar values
    ↓
 Metric Calculations
    ↓
-UI Update + Alert Engine
+Menu UI Update + Alert Engine (notifications + in-menu banner)
+
+Click "Open Details…"
    ↓
-macOS Notification Center
+GetMetricData (1d/7d/30d range)  +  DescribeDimensionKeys (Performance Insights)
+   ↓
+SwiftUI + Charts dashboard (NSHostingView in a floating NSWindow)
 ```
 
 ## Project Structure
@@ -206,21 +226,24 @@ macOS Notification Center
 ```
 PulseBar/
 ├── Sources/
-│   ├── main.swift                    # App entry point
-│   ├── AppDelegate.swift             # Menu bar UI & coordination
-│   ├── AWSCredentialsReader.swift    # Reads ~/.aws files
-│   ├── RDSMonitoringService.swift    # AWS SDK integration
-│   ├── AlertManager.swift            # Notification logic
-│   └── Models.swift                  # Data structures
+│   ├── main.swift                          # App entry point
+│   ├── AppDelegate.swift                   # Menu bar UI & coordination
+│   ├── AWSCredentialsReader.swift          # Reads ~/.aws files
+│   ├── RDSMonitoringService.swift          # AWS SDK integration (RDS, CloudWatch, PI)
+│   ├── AlertManager.swift                  # Notification logic
+│   ├── DatabaseDetailWindowController.swift # Detail window + view model
+│   ├── MetricsDashboardView.swift          # SwiftUI + Charts dashboard
+│   └── Models.swift                        # Data structures
 ├── Assets/
-│   └── screenshot.png                # App screenshot
-├── icons/
-│   └── *.png                         # App icons (16-1024px)
+│   └── screenshot.png                      # App screenshot
+├── Icons/
+│   └── *.png                               # App icons (16-1024px)
 ├── .github/
-│   ├── PULL_REQUEST_TEMPLATE.md      # PR template
+│   ├── ISSUE_TEMPLATE/                      # Bug report & feature request templates
+│   ├── PULL_REQUEST_TEMPLATE.md            # PR template
 │   └── workflows/
-│       ├── pr-validation.yml         # PR build checks
-│       └── release.yml               # Auto-build on release
+│       ├── pr-validation.yml               # PR build checks
+│       └── release.yml                     # Auto-build on release
 ├── Package.swift                     # Swift Package Manager config
 ├── Info.plist                        # App metadata
 ├── Makefile                          # Build commands
@@ -246,7 +269,8 @@ make help     # Show all commands
 
 ### Dependencies
 
-- `aws-sdk-swift` v0.40.0+ (AWSRDS, AWSCloudWatch)
+- `aws-sdk-swift` v0.40.0+ (AWSRDS, AWSCloudWatch, AWSPI)
+- `SwiftUI` and `Charts` (system frameworks, macOS 13+) for the detail dashboard
 
 Dependencies are managed via Swift Package Manager and will be automatically resolved on build.
 
@@ -259,14 +283,13 @@ This project uses GitHub Actions for:
 
 See `.github/workflows/` for details.
 
-## Limitations (v1)
+## Limitations
 
-- No historical graphs or trends
-- Basic max_connections estimation (not querying parameter groups)
-- No Performance Insights integration
+- Basic `max_connections` estimation (not querying parameter groups)
+- Performance Insights panels require PI to be enabled on the instance and `pi:DescribeDimensionKeys` permission
 - Single account only (no multi-account aggregation)
 - Read-only monitoring (cannot modify RDS instances)
-- Notifications require app bundle (not available via `swift run`)
+- System notifications are most reliable from a signed, installed app bundle (an in-menu alert banner always works as a fallback)
 
 ## Troubleshooting
 
@@ -309,10 +332,15 @@ EOF
 Verify your IAM user/role has these permissions:
 - `rds:DescribeDBInstances`
 - `cloudwatch:GetMetricData`
+- `pi:DescribeDimensionKeys` *(only for Performance Insights panels)*
 
 ### Storage shows "N/A"
 
 CloudWatch may not have recent data. The app queries a 1-hour window; if no data exists, it shows N/A.
+
+### Sessions or Performance Insights show "No data"
+
+`DBLoad` and the Top Queries/Users/Hosts panels require **Performance Insights to be enabled** on the instance. When it's off, the Sessions row falls back to the raw connection count and the dashboard panels show a notice.
 
 ### Notifications not appearing
 
@@ -320,6 +348,8 @@ CloudWatch may not have recent data. The app queries a 1-hour window; if no data
 2. Check System Settings → Notifications → PulseBar
 3. Ensure notifications are enabled
 4. Restart the app if needed
+
+Even when system notifications are blocked, PulseBar shows an **alert banner at the top of the menu** listing any instances that are breaching thresholds — so you never miss an alert.
 
 ### High CPU/memory usage during first run
 
@@ -342,10 +372,11 @@ For architecture and technical details, see [agents.md](agents.md).
 
 ## Roadmap
 
-- [ ] Parameter group querying for accurate max_connections
-- [ ] Historical metric graphs
-- [ ] Performance Insights integration
+- [x] Historical metric graphs (detail dashboard)
+- [x] Performance Insights integration (top queries/users/hosts)
+- [ ] Parameter group querying for accurate `max_connections`
 - [ ] Multi-account support
 - [ ] Custom alert thresholds
-- [ ] Export metrics to CSV/JSON
+- [ ] Export charts to CSV/PNG
+- [ ] RDS events & CloudWatch alarms panel
 - [ ] Sparkline trends in menu
