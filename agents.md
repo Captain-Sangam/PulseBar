@@ -72,12 +72,18 @@ region = us-east-1
   - Instance class (db.t3.micro, db.r5.large, etc.)
   - Allocated storage (GiB)
   - Instance status
+  - DbiResourceId + Performance Insights enabled flag (for PI queries)
+  - Read-replica source identifier (for replica grouping)
   - Parameter group (for max_connections lookup - future)
 
 #### Refresh Behavior
-- Auto-refresh every 15 minutes (900 seconds)
+- Auto-refresh on a configurable interval (default 15 min; see `Settings`)
 - Manual refresh via menu button
 - In-memory cache only (no persistence)
+
+#### Replica Grouping
+- Read replicas are nested under their source instance in the menu (when the source is in the
+  same list), with a `ReplicaLag` readout in the submenu
 
 ### 3. Metrics Collection
 
@@ -129,11 +135,12 @@ clamped to the last 7 days (an API constraint), and the panels are skipped entir
 ### 4. Alerting System
 
 #### Alert Thresholds
-Trigger notification if **ANY** of these conditions are met:
-- CPU Utilization > 50%
-- Connections Used % > 50%
-- Storage Used % > 50%
-- Activity (raw connections) > 50% of max_connections
+Trigger notification if **ANY** metric exceeds the configurable threshold (default 50%, set via
+the ⚙️ Settings submenu and stored in `Settings.shared.alertThreshold`):
+- CPU Utilization > threshold
+- Connections Used % > threshold
+- Storage Used % > threshold
+- Activity (raw connections) > threshold% of max_connections
 
 **Exception**: -1 (N/A) values are ignored in alert calculations.
 
@@ -155,12 +162,13 @@ Storage: {value}%
   - Different metric(s) are now breaching (metric set changed)
   - Instance recovered and breached again (alert was cleared)
   - More than 15 minutes since last alert for same condition
-- Clear alert state when all metrics return below 50%
+- Clear alert state when all metrics return below the threshold
 
-#### Notification Requirements
-- **Only works when running as app bundle** (via `make install`)
-- Running via `swift run` disables notifications (no bundle identifier)
-- Alerts are always logged to console regardless of bundle status
+#### Notification Delivery (layered)
+- **Bundled app** (`make install`): `UNUserNotificationCenter` system notifications
+- **Unsigned / `swift run`**: falls back to legacy `NSUserNotification` (no entitlement needed)
+- **Always**: an in-menu alert banner lists breaching instances, so alerts are visible even when
+  OS notifications are blocked; alerts are also logged to console
 
 ### 5. User Interface
 
@@ -312,7 +320,10 @@ credentialsProvider: ...                 // Wrong parameter name
       "Effect": "Allow",
       "Action": [
         "rds:DescribeDBInstances",
-        "cloudwatch:GetMetricData"
+        "cloudwatch:GetMetricData",
+        "rds:DescribeEvents",
+        "cloudwatch:DescribeAlarms",
+        "pi:DescribeDimensionKeys"
       ],
       "Resource": "*"
     }
@@ -320,11 +331,13 @@ credentialsProvider: ...                 // Wrong parameter name
 }
 ```
 
+> Only the first two actions are required. `rds:DescribeEvents` / `cloudwatch:DescribeAlarms` power the events & alarms panel; `pi:DescribeDimensionKeys` powers the Performance Insights panels. All are read-only and degrade gracefully when absent.
+
 ### Data Flow
 
 ```
 ┌─────────────────────────────────────────────────────────────┐
-│ Timer (15 min) / Manual Refresh                             │
+│ Timer (configurable interval) / Manual Refresh              │
 │ state = .loading                                            │
 └────────────────────┬────────────────────────────────────────┘
                      ↓
@@ -362,7 +375,7 @@ credentialsProvider: ...                 // Wrong parameter name
 ┌─────────────────────────────────────────────────────────────┐
 │ RDSMonitoringService.checkAlerts()                          │
 │ - For each instance with metrics:                           │
-│   - Evaluate thresholds (>50%, ignoring -1)                 │
+│   - Evaluate thresholds (> configured %, ignoring -1)       │
 │   - If breached → AlertManager.sendAlert()                  │
 │   - If recovered → AlertManager.clearAlert()                │
 │ state = .loaded                                             │
@@ -459,7 +472,7 @@ PulseBar/
   - `createInstanceMenuItem()` - Format instance data for display
   - `createMetricMenuItem()` - Format individual metric with color
   - `refreshData()` - Trigger data refresh
-  - `startAutoRefresh()` - Setup 900s timer
+  - `startAutoRefresh()` - Setup auto-refresh timer (configurable interval)
   - `requestNotificationPermissions()` - Safe notification setup
   - `openAWSCredentialsDocs()` - Open AWS CLI docs in browser
 
@@ -783,7 +796,7 @@ private func sendNotification(message: String) {
    - [ ] Metrics appear for each instance
    - [ ] Storage shows actual value (not N/A or 100%)
    - [ ] Manual refresh updates data
-   - [ ] Auto-refresh triggers every 15 minutes
+   - [ ] Auto-refresh triggers on the configured interval
 
 3. **UI**:
    - [ ] Menu bar icon appears
@@ -792,12 +805,13 @@ private func sendNotification(message: String) {
    - [ ] N/A displays correctly for missing data
    - [ ] Submenus expand correctly
 
-4. **Alerts** (requires `make install`):
-   - [ ] Notification sent when metric > 50%
+4. **Alerts**:
+   - [ ] Notification and/or in-menu banner appears when a metric exceeds the threshold
    - [ ] No duplicate notifications for same condition
    - [ ] New notification when different metric breaches
    - [ ] Alert clears when metrics recover
    - [ ] Console shows alert even without bundle
+   - [ ] Changing the threshold/interval in Settings takes effect
 
 ### Build and Release
 
@@ -858,9 +872,12 @@ GitHub Actions workflows in `.github/workflows/`:
 | Change Performance Insights panels | `RDSMonitoringService.swift`, `MetricsDashboardView.swift` | `fetchPerformanceInsights()`, `TopPanel`     |
 | Change menu UI layout    | `AppDelegate.swift`                          | `updateMenu()`, `createInstanceMenuItem()`             |
 | Change detail window      | `DatabaseDetailWindowController.swift`       | `init`, `reload(range:)`, `present()`                  |
+| Change events/alarms panel | `RDSMonitoringService.swift`, `MetricsDashboardView.swift` | `fetchInstanceActivity()`, `activitySection`  |
 | Modify alert logic       | `AlertManager.swift`, `Models.swift`         | `sendAlert()`, `hasAlert()`, `getAlertingMetrics()`    |
+| Change settings/defaults | `Settings.swift`, `AppDelegate.swift`        | `Settings.shared`, `buildSettingsMenuItem()`           |
+| Change replica grouping  | `AppDelegate.swift`, `RDSMonitoringService.swift` | `updateMenu()` (.loaded), `readReplicaSource`     |
 | Add AWS profile support  | `AWSCredentialsReader.swift`                 | `getCredentials()`, `listProfiles()`                   |
-| Change refresh interval  | `AppDelegate.swift`                          | `startAutoRefresh()` (currently 900s)                  |
+| Change refresh interval  | `Settings.swift`, `AppDelegate.swift`        | `refreshIntervalMinutes`, `startAutoRefresh()`         |
 | Change default region    | `RDSMonitoringService.swift`                 | `currentRegion` property                               |
 | Change menu-bar icon     | `AppDelegate.swift`                          | `applicationDidFinishLaunching` (SF Symbol)            |
 
@@ -868,13 +885,13 @@ GitHub Actions workflows in `.github/workflows/`:
 
 | Constant          | Value             | Location             | Description                          |
 | ----------------- | ----------------- | -------------------- | ------------------------------------ |
-| Refresh interval  | 900s (15 min)     | AppDelegate          | Auto-refresh timer                   |
+| Refresh interval  | 15 min (default)  | Settings             | Configurable 1–60 min                |
 | CloudWatch window | 3600s (1 hour)    | RDSMonitoringService | Time range for menu metrics          |
 | CPU/Conn period   | 300s (5 min)      | RDSMonitoringService | CloudWatch aggregation               |
 | Storage period    | 3600s (1 hour)    | RDSMonitoringService | Longer for reliability               |
 | Dashboard periods | 300/3600/21600s   | Models (MetricRange) | 1D / 7D / 30D chart aggregation      |
 | PI window cap     | 7 days            | RDSMonitoringService | Performance Insights StartTime limit |
-| Alert threshold   | 50%               | Models.swift         | All metrics                          |
+| Alert threshold   | 50% (default)     | Settings             | Configurable; applied in Models/AlertManager |
 | Default region    | us-west-2         | RDSMonitoringService | Initial region                       |
 
 ---

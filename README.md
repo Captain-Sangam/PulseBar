@@ -190,7 +190,7 @@ region = us-east-1
 
 ## Alert Behavior
 
-Notifications are sent when any metric exceeds 50%:
+Notifications are sent when any metric exceeds the configured threshold (default 50%, set in ⚙️ Settings):
 
 - Alerts are deduplicated (won't spam for the same condition)
 - New notifications sent if:
@@ -210,7 +210,7 @@ Connections: 61%
 ## Architecture
 
 ```
-Timer (15 min)
+Timer (configurable interval)
    ↓
 Load AWS Profile/Credentials
    ↓

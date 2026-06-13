@@ -324,7 +324,7 @@ refactor(alerts): extract deduplication logic to separate method
 - [ ] Color coding is correct
 - [ ] Refresh button works
 - [ ] Auto-refresh works (wait 15 minutes or modify timer)
-- [ ] Alerts trigger when metrics exceed 50% (notification and/or in-menu banner)
+- [ ] Alerts trigger when metrics exceed the threshold (notification and/or in-menu banner)
 - [ ] "Open Details…" opens the dashboard window
 - [ ] Charts render for 1D / 7D / 30D and the range toggle reloads
 - [ ] Performance Insights panels populate (or show the "not enabled" notice)
