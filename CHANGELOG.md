@@ -17,13 +17,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (average active sessions), falling back to the raw connection count when PI is disabled.
 - **Performance Insights panels**: Top Queries, Top Users, and Top Hosts by average active
   sessions, shown in the detail dashboard (requires `pi:DescribeDimensionKeys`).
+- **Query drill-down**: click any Top Query to open a dedicated window showing its load over time
+  (`pi:GetResourceMetrics`), the individual SQL statements behind the digest with their load
+  (`pi:DescribeDimensionKeys` on `db.sql`), the users/hosts that ran it, and the full SQL text of
+  any statement on demand (`pi:GetDimensionKeyDetails`) — mirroring the RDS console's Top SQL flow.
 - **In-menu alert banner** listing instances that breach thresholds, so alerts are visible
   even when system notifications are suppressed.
 - **Configurable settings** (⚙️ Settings submenu): alert threshold (default 50%) and auto-refresh
   interval (1–60 min), persisted in UserDefaults.
 - **Read-replica grouping**: replicas are nested under their primary in the menu, with `ReplicaLag`.
-- **Events & Alarms panel** in the detail window: recent RDS events (`DescribeEvents`) and active
-  CloudWatch alarms (`DescribeAlarms`, ALARM state).
 - **Open in AWS Console**: per-database deep link to the RDS console.
 - GitHub issue templates (bug report, feature request) and this changelog.
 
@@ -33,6 +35,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   bundled image. It adapts to light/dark mode and renders in every run mode.
 - Notifications now fall back to a legacy delivery path when `UNUserNotificationCenter` is
   unavailable (e.g. unsigned local builds).
+- The detail dashboard window now **sizes its height to fit its content**, so the whole dashboard
+  (charts + Performance Insights) is visible without a scroll bar.
+- Top Queries rows now show the **start** of each query (no longer truncated in the middle) with
+  subtle separators between rows; empty digests show `(no statement text)` instead of a blank row.
+- Removed the **Events & Alarms** section from the detail window (and its `DescribeEvents` /
+  `DescribeAlarms` calls).
 - Added the `AWSPI` (Performance Insights) dependency.
 
 ### Fixed
@@ -41,6 +49,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   (which `NSImage(contentsOfFile:)` cannot decode) and the `Makefile`/CI referenced a
   wrong-case `icons/` directory. The icon is now an SF Symbol; the Dock icon is re-encoded to
   real PNG via `sips` at build time, and the path case is corrected.
+- **Blank icon in the notification permission prompt**: the app bundle had no real icon registered
+  (`Info.plist` lacked `CFBundleIconFile` and only a flat PNG was copied), so macOS showed a generic
+  placeholder. `make install` now builds a proper multi-resolution `AppIcon.icns` via `iconutil`,
+  and `Info.plist` references it.
 
 ## [1.0.0]
 

@@ -21,10 +21,10 @@
 ## Features
 
 - 📊 **At-a-glance Monitoring**: CPU, connections, sessions, and storage for every RDS instance, right in the menu bar
-- 📈 **Detail Dashboard**: Click any database for a popup with six time-series charts (CPU, Memory, Storage) over the last **1 day / 7 days / 30 days**
+- 📈 **Detail Dashboard**: Click any database for a popup with six time-series charts (CPU, Memory, Storage) over the last **1 day / 7 days / 30 days** — sized to fit the content, no scrolling
 - 🔍 **Performance Insights**: Top SQL queries, users, and hosts by average active sessions (when PI is enabled)
+- 🔎 **Query Drill-down**: Click any Top Query to open a dedicated window with its load over time, the individual SQL statements behind the digest (expand any to its full SQL), and the users/hosts that ran it — the same flow as the RDS console's Top SQL view
 - 🧬 **Replica Awareness**: Read replicas are nested under their primary, with replica lag
-- 🔔 **Events & Alarms**: Recent RDS events and active CloudWatch alarms in the detail window
 - 🔗 **Open in AWS Console**: One-click deep link to any instance in the RDS console
 - ⚡ **Auto-refresh**: Menu-bar metrics update automatically (configurable: 1–60 min)
 - 🔔 **Smart Alerts**: macOS notifications when metrics exceed a configurable threshold (default 50%), plus an always-visible in-menu alert banner
@@ -60,9 +60,9 @@
 - IAM permissions:
   - `rds:DescribeDBInstances`
   - `cloudwatch:GetMetricData`
-  - `rds:DescribeEvents` *(for the events panel)*
-  - `cloudwatch:DescribeAlarms` *(for the alarms panel)*
-  - `pi:DescribeDimensionKeys` *(optional — only for the Top Queries/Users/Hosts panels)*
+  - `pi:DescribeDimensionKeys` *(optional — for the Top Queries/Users/Hosts panels)*
+  - `pi:GetResourceMetrics` *(optional — for the query drill-down load chart)*
+  - `pi:GetDimensionKeyDetails` *(optional — to expand a statement to its full SQL)*
 
 ## Installation
 
@@ -136,16 +136,16 @@ region = us-east-1
     "Action": [
       "rds:DescribeDBInstances",
       "cloudwatch:GetMetricData",
-      "rds:DescribeEvents",
-      "cloudwatch:DescribeAlarms",
-      "pi:DescribeDimensionKeys"
+      "pi:DescribeDimensionKeys",
+      "pi:GetResourceMetrics",
+      "pi:GetDimensionKeyDetails"
     ],
     "Resource": "*"
   }]
 }
 ```
 
-> Only `rds:DescribeDBInstances` and `cloudwatch:GetMetricData` are strictly required. `rds:DescribeEvents` and `cloudwatch:DescribeAlarms` power the events/alarms panel, and `pi:DescribeDimensionKeys` powers the Performance Insights panels — PulseBar degrades gracefully when any are missing.
+> Only `rds:DescribeDBInstances` and `cloudwatch:GetMetricData` are strictly required. The `pi:*` actions power the Performance Insights panels and the query drill-down (`pi:DescribeDimensionKeys` for the Top lists and statement breakdown, `pi:GetResourceMetrics` for the per-query load chart, `pi:GetDimensionKeyDetails` for full SQL text) — PulseBar degrades gracefully when any are missing.
 
 ## Usage
 
@@ -154,6 +154,7 @@ region = us-east-1
 3. Select your AWS profile and region
 4. View at-a-glance metrics for all RDS instances
 5. Hover an instance and choose **📊 Open Details…** to open the full dashboard with charts and Performance Insights
+6. In the dashboard, click any **Top Query** to drill into its load over time, individual SQL statements, and the users/hosts that ran it
 
 ### Menu Options
 
@@ -226,7 +227,15 @@ Click "Open Details…"
    ↓
 GetMetricData (1d/7d/30d range)  +  DescribeDimensionKeys (Performance Insights)
    ↓
-SwiftUI + Charts dashboard (NSHostingView in a floating NSWindow)
+SwiftUI + Charts dashboard (NSHostingView in a floating NSWindow, sized to fit)
+
+Click a Top Query
+   ↓
+GetResourceMetrics (load over time, filtered to the digest)
+   +  DescribeDimensionKeys (db.sql statements behind the digest, plus users/hosts)
+   +  GetDimensionKeyDetails (full SQL text, on demand)
+   ↓
+Query drill-down window (its own floating NSWindow)
 ```
 
 ## Project Structure
@@ -240,8 +249,10 @@ PulseBar/
 │   ├── RDSMonitoringService.swift          # AWS SDK integration (RDS, CloudWatch, PI)
 │   ├── AlertManager.swift                  # Notification logic
 │   ├── Settings.swift                      # User preferences (threshold, interval)
-│   ├── DatabaseDetailWindowController.swift # Detail window + view model
+│   ├── DatabaseDetailWindowController.swift # Detail window + view model (auto-sizes to fit)
 │   ├── MetricsDashboardView.swift          # SwiftUI + Charts dashboard
+│   ├── QueryDetailWindowController.swift   # Per-query drill-down window + view model
+│   ├── QueryDetailView.swift               # SwiftUI view for the query drill-down
 │   └── Models.swift                        # Data structures
 ├── Assets/
 │   └── screenshot.png                      # App screenshot
@@ -295,7 +306,8 @@ See `.github/workflows/` for details.
 ## Limitations
 
 - Basic `max_connections` estimation (not querying parameter groups)
-- Performance Insights panels require PI to be enabled on the instance and `pi:DescribeDimensionKeys` permission
+- Performance Insights panels and the query drill-down require PI to be enabled on the instance and the `pi:*` permissions listed above
+- Performance Insights retains data for the past 7 days, so the query drill-down's 30-day range is clamped to that window
 - Single account only (no multi-account aggregation)
 - Read-only monitoring (cannot modify RDS instances)
 - System notifications are most reliable from a signed, installed app bundle (an in-menu alert banner always works as a fallback)
@@ -341,7 +353,7 @@ EOF
 Verify your IAM user/role has these permissions:
 - `rds:DescribeDBInstances`
 - `cloudwatch:GetMetricData`
-- `pi:DescribeDimensionKeys` *(only for Performance Insights panels)*
+- `pi:DescribeDimensionKeys`, `pi:GetResourceMetrics`, `pi:GetDimensionKeyDetails` *(only for Performance Insights panels and the query drill-down)*
 
 ### Storage shows "N/A"
 

@@ -443,7 +443,7 @@ class RDSMonitoringService {
         let window = min(range.seconds, 604_800)
         let startTime = now.addingTimeInterval(-window)
 
-        func topItems(groupName: String, dimensionKey: String) async -> [TopItem] {
+        func topItems(groupName: String, dimensionKey: String, idKey: String? = nil) async -> [TopItem] {
             let input = DescribeDimensionKeysInput(
                 endTime: now,
                 groupBy: PIClientTypes.DimensionGroup(group: groupName),
@@ -460,7 +460,9 @@ class RDSMonitoringService {
                     let label = key.dimensions?[dimensionKey]
                         ?? key.dimensions?.values.first
                         ?? "(unknown)"
-                    return TopItem(label: label, load: key.total ?? 0)
+                    // For queries, also capture the digest id so the row can drill down.
+                    let digestId = idKey.flatMap { key.dimensions?[$0] }
+                    return TopItem(label: label, load: key.total ?? 0, digestId: digestId)
                 }
                 .sorted { $0.load > $1.load }
             } catch {
@@ -470,75 +472,176 @@ class RDSMonitoringService {
         }
 
         // db.sql_tokenized groups by digest text; db.user and db.host break down by client.
-        let queries = await topItems(groupName: "db.sql_tokenized", dimensionKey: "db.sql_tokenized.statement")
+        let queries = await topItems(
+            groupName: "db.sql_tokenized",
+            dimensionKey: "db.sql_tokenized.statement",
+            idKey: "db.sql_tokenized.id"
+        )
         let users = await topItems(groupName: "db.user", dimensionKey: "db.user.name")
         let hosts = await topItems(groupName: "db.host", dimensionKey: "db.host.name")
 
         return PerformanceInsightsData(enabled: true, topQueries: queries, topUsers: users, topHosts: hosts)
     }
 
-    // MARK: - Events & alarms
+    // MARK: - Query drill-down (Top SQL → invocations)
 
-    /// Fetches recent RDS events (last 7 days) and any CloudWatch alarms in ALARM state for the
-    /// instance. Each source is fetched defensively so one failure doesn't sink the other.
-    func fetchInstanceActivity(instanceId: String) async throws -> InstanceActivity {
-        async let events = fetchRecentEvents(instanceId: instanceId)
-        async let alarms = fetchActiveAlarms(instanceId: instanceId)
-        return InstanceActivity(events: await events, alarms: await alarms)
+    /// Fetches the per-query detail for one tokenized digest: db.load over time, the individual
+    /// SQL statements behind the digest, and the users / hosts that ran it — all scoped by a
+    /// `db.sql_tokenized.id` filter, mirroring the RDS console's Top SQL drill-down.
+    func fetchQueryDetail(
+        instance: RDSInstance,
+        digestId: String,
+        digestText: String,
+        range: MetricRange
+    ) async throws -> QueryDetail {
+        guard instance.performanceInsightsEnabled, let resourceId = instance.dbiResourceId else {
+            throw NSError(domain: "PulseBar", code: 2,
+                          userInfo: [NSLocalizedDescriptionKey: "Performance Insights is not enabled for this instance."])
+        }
+
+        let client = try await createPIClient()
+        let now = Date()
+        // Performance Insights only retains StartTime within the past 7 days.
+        let window = min(range.seconds, 604_800)
+        let startTime = now.addingTimeInterval(-window)
+        let filter = ["db.sql_tokenized.id": digestId]
+
+        async let load = fetchQueryLoadOverTime(
+            client: client, resourceId: resourceId, filter: filter,
+            startTime: startTime, endTime: now, range: range
+        )
+        async let statements = fetchQueryStatements(
+            client: client, resourceId: resourceId, filter: filter,
+            startTime: startTime, endTime: now
+        )
+        async let users = fetchQueryDimension(
+            client: client, resourceId: resourceId, filter: filter, group: "db.user",
+            dimensionKey: "db.user.name", startTime: startTime, endTime: now
+        )
+        async let hosts = fetchQueryDimension(
+            client: client, resourceId: resourceId, filter: filter, group: "db.host",
+            dimensionKey: "db.host.name", startTime: startTime, endTime: now
+        )
+
+        return QueryDetail(
+            digestText: digestText,
+            loadOverTime: await load,
+            statements: await statements,
+            topUsers: await users,
+            topHosts: await hosts
+        )
     }
 
-    private func fetchRecentEvents(instanceId: String) async -> [RDSEvent] {
+    /// Resolves the full, untruncated SQL text for one statement id (db.sql.id) via GetDimensionKeyDetails.
+    func fetchFullSQL(instance: RDSInstance, statementId: String) async throws -> String {
+        guard let resourceId = instance.dbiResourceId else {
+            throw NSError(domain: "PulseBar", code: 3,
+                          userInfo: [NSLocalizedDescriptionKey: "Missing resource id."])
+        }
+        let client = try await createPIClient()
+        let input = GetDimensionKeyDetailsInput(
+            group: "db.sql",
+            groupIdentifier: statementId,
+            identifier: resourceId,
+            requestedDimensions: ["db.sql.statement"],
+            serviceType: .rds
+        )
+        let response = try await client.getDimensionKeyDetails(input: input)
+        // The full statement comes back as a dimension detail value, but only when its status is AVAILABLE.
+        if let detail = response.dimensions?.first(where: { $0.dimension == "db.sql.statement" }),
+           let value = detail.value, !value.isEmpty {
+            return value
+        }
+        throw NSError(domain: "PulseBar", code: 4,
+                      userInfo: [NSLocalizedDescriptionKey: "Full SQL text is not available for this statement."])
+    }
+
+    /// db.load.avg over time, filtered to a single query digest.
+    private func fetchQueryLoadOverTime(
+        client: PIClient, resourceId: String, filter: [String: String],
+        startTime: Date, endTime: Date, range: MetricRange
+    ) async -> MetricSeries {
+        // PI accepts only 1 / 60 / 300 / 3600 / 86400 for the period; the dashboard's 6h
+        // bucket isn't valid here, so clamp anything coarser than an hour down to 1h.
+        let period = min(range.period, 3_600)
+        let input = GetResourceMetricsInput(
+            endTime: endTime,
+            identifier: resourceId,
+            metricQueries: [PIClientTypes.MetricQuery(filter: filter, metric: "db.load.avg")],
+            periodInSeconds: period,
+            serviceType: .rds,
+            startTime: startTime
+        )
         do {
-            let client = try await createRDSClient()
-            // DescribeEvents accepts a duration in minutes; 7 days = 10080 minutes (the max retention).
-            let input = DescribeEventsInput(
-                duration: 10_080,
-                maxRecords: 20,
-                sourceIdentifier: instanceId,
-                sourceType: .dbInstance
-            )
-            let response = try await client.describeEvents(input: input)
-            let events = (response.events ?? []).compactMap { e -> RDSEvent? in
-                guard let date = e.date, let message = e.message else { return nil }
-                return RDSEvent(date: date, message: message, categories: e.eventCategories ?? [])
-            }
-            return events.sorted { $0.date > $1.date }
+            let response = try await client.getResourceMetrics(input: input)
+            let points = (response.metricList?.first?.dataPoints ?? []).compactMap { dp -> MetricPoint? in
+                guard let ts = dp.timestamp, let value = dp.value else { return nil }
+                return MetricPoint(timestamp: ts, value: value)
+            }.sorted { $0.timestamp < $1.timestamp }
+            return MetricSeries(displayName: "DB Load (avg active sessions)", unit: .count, points: points)
         } catch {
-            print("DescribeEvents failed for \(instanceId): \(error)")
+            print("PI query load-over-time failed: \(error)")
+            return MetricSeries(displayName: "DB Load (avg active sessions)", unit: .count, points: [])
+        }
+    }
+
+    /// The individual full SQL statements that rolled up into a digest, ranked by load.
+    private func fetchQueryStatements(
+        client: PIClient, resourceId: String, filter: [String: String],
+        startTime: Date, endTime: Date
+    ) async -> [SQLStatement] {
+        let input = DescribeDimensionKeysInput(
+            endTime: endTime,
+            filter: filter,
+            groupBy: PIClientTypes.DimensionGroup(group: "db.sql"),
+            identifier: resourceId,
+            maxResults: 25,
+            metric: "db.load.avg",
+            serviceType: .rds,
+            startTime: startTime
+        )
+        do {
+            let response = try await client.describeDimensionKeys(input: input)
+            return (response.keys ?? []).compactMap { key -> SQLStatement? in
+                let preview = key.dimensions?["db.sql.statement"] ?? "(unknown)"
+                let statementId = key.dimensions?["db.sql.id"]
+                return SQLStatement(statementId: statementId, previewText: preview, load: key.total ?? 0)
+            }
+            .sorted { $0.load > $1.load }
+        } catch {
+            print("PI query statements failed: \(error)")
             return []
         }
     }
 
-    private func fetchActiveAlarms(instanceId: String) async -> [CloudWatchAlarmInfo] {
+    /// A "Top users" / "Top hosts" breakdown scoped to a single query digest.
+    private func fetchQueryDimension(
+        client: PIClient, resourceId: String, filter: [String: String],
+        group: String, dimensionKey: String, startTime: Date, endTime: Date
+    ) async -> [TopItem] {
+        let input = DescribeDimensionKeysInput(
+            endTime: endTime,
+            filter: filter,
+            groupBy: PIClientTypes.DimensionGroup(group: group),
+            identifier: resourceId,
+            maxResults: 10,
+            metric: "db.load.avg",
+            serviceType: .rds,
+            startTime: startTime
+        )
         do {
-            let client = try await createCloudWatchClient()
-            // Only metric alarms currently in ALARM state.
-            let input = DescribeAlarmsInput(
-                alarmTypes: [.metricalarm],
-                maxRecords: 50,
-                stateValue: .alarm
-            )
-            let response = try await client.describeAlarms(input: input)
-            let alarms = (response.metricAlarms ?? []).compactMap { a -> CloudWatchAlarmInfo? in
-                guard let name = a.alarmName else { return nil }
-                // Keep alarms that reference this instance via a DBInstanceIdentifier dimension.
-                let matchesInstance = (a.dimensions ?? []).contains {
-                    $0.name == "DBInstanceIdentifier" && $0.value == instanceId
-                }
-                guard matchesInstance else { return nil }
-                return CloudWatchAlarmInfo(
-                    name: name,
-                    reason: a.stateReason ?? "",
-                    metricName: a.metricName
-                )
+            let response = try await client.describeDimensionKeys(input: input)
+            return (response.keys ?? []).compactMap { key -> TopItem? in
+                let label = key.dimensions?[dimensionKey] ?? key.dimensions?.values.first ?? "(unknown)"
+                return TopItem(label: label, load: key.total ?? 0)
             }
-            return alarms
+            .sorted { $0.load > $1.load }
         } catch {
-            print("DescribeAlarms failed for \(instanceId): \(error)")
+            print("PI query \(group) failed: \(error)")
             return []
         }
     }
-    
+
     private func createRDSClient() async throws -> RDSClient {
         guard let credentials = AWSCredentialsReader.shared.getCredentials(profile: currentProfile) else {
             throw NSError(domain: "PulseBar", code: 1, userInfo: [NSLocalizedDescriptionKey: "Failed to load AWS credentials"])
