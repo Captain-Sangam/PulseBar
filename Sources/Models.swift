@@ -211,6 +211,38 @@ struct TopItem: Identifiable {
     let id = UUID()
     let label: String
     let load: Double
+    /// For Top Queries rows, the Performance Insights tokenized-digest id (db.sql_tokenized.id).
+    /// Used to drill into the individual SQL statements and load-over-time for this query.
+    /// nil for users / hosts (and queries where PI didn't return an id).
+    var digestId: String? = nil
+}
+
+// MARK: - Query drill-down (Top SQL → invocations)
+
+/// The per-query drill-down shown when a Top Query is opened in its own window:
+/// load over time for the digest, the individual SQL statements behind it, and the
+/// users / hosts that ran it. Mirrors the RDS console's Top SQL detail view.
+struct QueryDetail {
+    /// The tokenized digest text (the query with literals replaced by `?`).
+    let digestText: String
+    /// db.load.avg over time, filtered to this query digest.
+    let loadOverTime: MetricSeries
+    /// Individual full SQL statements that rolled up into this digest, ranked by load.
+    let statements: [SQLStatement]
+    /// Users that ran this query, ranked by load.
+    let topUsers: [TopItem]
+    /// Hosts that ran this query, ranked by load.
+    let topHosts: [TopItem]
+}
+
+/// One concrete SQL statement behind a digest. `fullText` is fetched lazily when the row is opened.
+struct SQLStatement: Identifiable {
+    let id = UUID()
+    /// db.sql.id — the Performance Insights hash of the full statement, used to fetch its full text.
+    let statementId: String?
+    /// The (possibly truncated) statement text returned alongside the dimension key.
+    let previewText: String
+    let load: Double
 }
 
 /// Performance Insights breakdowns shown beneath the charts.
@@ -221,30 +253,4 @@ struct PerformanceInsightsData {
     let topHosts: [TopItem]
 
     static let disabled = PerformanceInsightsData(enabled: false, topQueries: [], topUsers: [], topHosts: [])
-}
-
-// MARK: - Events & alarms
-
-/// A recent RDS event (failover, restart, maintenance, etc.) for the detail window.
-struct RDSEvent: Identifiable {
-    let id = UUID()
-    let date: Date
-    let message: String
-    let categories: [String]
-}
-
-/// A CloudWatch alarm currently in the ALARM state for this instance.
-struct CloudWatchAlarmInfo: Identifiable {
-    let id = UUID()
-    let name: String
-    let reason: String
-    let metricName: String?
-}
-
-/// Recent events and active alarms shown in the detail window.
-struct InstanceActivity {
-    let events: [RDSEvent]
-    let alarms: [CloudWatchAlarmInfo]
-
-    static let empty = InstanceActivity(events: [], alarms: [])
 }

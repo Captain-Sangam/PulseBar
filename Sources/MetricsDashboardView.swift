@@ -7,7 +7,7 @@ struct MetricsDashboardView: View {
     @ObservedObject var model: DetailViewModel
 
     var body: some View {
-        ScrollView {
+        ScrollView(.vertical, showsIndicators: false) {
             VStack(alignment: .leading, spacing: 14) {
                 header
 
@@ -26,7 +26,6 @@ struct MetricsDashboardView: View {
                     ])
 
                     performanceInsightsSection
-                    activitySection
                 } else if model.errorMessage != nil {
                     placeholder(systemImage: "exclamationmark.triangle", text: model.errorMessage ?? "Error")
                 } else {
@@ -34,8 +33,15 @@ struct MetricsDashboardView: View {
                 }
             }
             .padding(20)
+            // Report the natural content height so the window can size itself to fit (no scroll bar).
+            .background(GeometryReader { geo in
+                Color.clear.preference(key: ContentHeightKey.self, value: geo.size.height)
+            })
         }
         .frame(minWidth: 760, minHeight: 520)
+        .onPreferenceChange(ContentHeightKey.self) { height in
+            model.onContentHeight?(height)
+        }
     }
 
     // MARK: - Header
@@ -128,7 +134,9 @@ struct MetricsDashboardView: View {
                 Text("Performance Insights").font(.headline)
                 if pi.enabled {
                     HStack(alignment: .top, spacing: 16) {
-                        TopPanel(title: "Top Queries", items: pi.topQueries)
+                        TopQueriesPanel(items: pi.topQueries) { item in
+                            model.onOpenQuery?(item)
+                        }
                         TopPanel(title: "Top Users", items: pi.topUsers)
                         TopPanel(title: "Top Hosts", items: pi.topHosts)
                     }
@@ -141,57 +149,6 @@ struct MetricsDashboardView: View {
             }
         }
     }
-
-    // MARK: - Events & alarms
-
-    @ViewBuilder
-    private var activitySection: some View {
-        if let activity = model.activity {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Events & Alarms").font(.headline)
-
-                // Active CloudWatch alarms (in ALARM state).
-                if !activity.alarms.isEmpty {
-                    ForEach(activity.alarms) { alarm in
-                        HStack(alignment: .top, spacing: 6) {
-                            Image(systemName: "bell.fill").foregroundColor(.red)
-                            VStack(alignment: .leading, spacing: 2) {
-                                Text(alarm.name).font(.caption).bold()
-                                if !alarm.reason.isEmpty {
-                                    Text(alarm.reason).font(.caption2).foregroundColor(.secondary)
-                                }
-                            }
-                        }
-                    }
-                }
-
-                // Recent RDS events.
-                if activity.events.isEmpty && activity.alarms.isEmpty {
-                    Text("No recent events or active alarms.")
-                        .font(.callout).foregroundColor(.secondary).padding(.vertical, 4)
-                } else {
-                    ForEach(activity.events.prefix(10)) { event in
-                        HStack(alignment: .top, spacing: 6) {
-                            Text(Self.eventDateFormatter.string(from: event.date))
-                                .font(.caption2.monospacedDigit())
-                                .foregroundColor(.secondary)
-                                .frame(width: 96, alignment: .leading)
-                            Text(event.message).font(.caption)
-                        }
-                    }
-                }
-            }
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(12)
-            .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.controlBackgroundColor)))
-        }
-    }
-
-    private static let eventDateFormatter: DateFormatter = {
-        let f = DateFormatter()
-        f.dateFormat = "MMM d HH:mm"
-        return f
-    }()
 
     // MARK: - Shared bits
 
@@ -246,6 +203,69 @@ private struct ChartCard<Content: View>: View {
         }
         .padding(12)
         .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.controlBackgroundColor)))
+    }
+}
+
+/// Carries the dashboard's natural content height up to the window controller so it can
+/// size the window to fit (avoiding a scroll bar).
+struct ContentHeightKey: PreferenceKey {
+    static var defaultValue: CGFloat = 0
+    static func reduce(value: inout CGFloat, nextValue: () -> CGFloat) {
+        value = max(value, nextValue())
+    }
+}
+
+/// The Top Queries panel. Unlike Top Users / Hosts, each row shows the *start* of the query
+/// (leading text, not middle-truncated) alongside its load, and is clickable to open the
+/// query's drill-down window — matching the RDS console's Top SQL flow.
+private struct TopQueriesPanel: View {
+    let items: [TopItem]
+    let onSelect: (TopItem) -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text("Top Queries").font(.subheadline).bold()
+                .padding(.bottom, 8)
+            if items.isEmpty {
+                Text("No data").font(.caption).foregroundColor(.secondary)
+            } else {
+                let rows = Array(items.prefix(10).enumerated())
+                ForEach(rows, id: \.element.id) { index, item in
+                    if index > 0 {
+                        Divider().opacity(0.4)
+                    }
+                    Button { onSelect(item) } label: {
+                        HStack(alignment: .top, spacing: 8) {
+                            // Show the query start; truncate the tail so the leading text is readable.
+                            // PI sometimes returns a digest with no statement text (engine-internal
+                            // queries) — show a placeholder rather than a blank line + floating number.
+                            Text(displayLabel(item.label))
+                                .font(.system(.caption, design: .monospaced))
+                                .foregroundColor(item.label.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? .secondary : .primary)
+                                .lineLimit(2)
+                                .truncationMode(.tail)
+                                .multilineTextAlignment(.leading)
+                            Spacer(minLength: 4)
+                            Text(String(format: "%.2f", item.load))
+                                .font(.caption.monospacedDigit())
+                                .foregroundColor(.secondary)
+                        }
+                        .padding(.vertical, 6)
+                        .contentShape(Rectangle())
+                    }
+                    .buttonStyle(.plain)
+                    .help(item.label)
+                }
+            }
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .padding(12)
+        .background(RoundedRectangle(cornerRadius: 8).fill(Color(NSColor.controlBackgroundColor)))
+    }
+
+    private func displayLabel(_ label: String) -> String {
+        let trimmed = label.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? "(no statement text)" : trimmed
     }
 }
 

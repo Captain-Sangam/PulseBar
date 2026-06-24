@@ -115,6 +115,22 @@ Performance Insights breakdowns. Charts are grouped CPU / Memory / Storage:
 Performance Insights panels (Top Queries / Users / Hosts) use `pi:DescribeDimensionKeys` with
 `metric: db.load.avg`, grouped by `db.sql_tokenized`, `db.user`, and `db.host`. PI `StartTime` is
 clamped to the last 7 days (an API constraint), and the panels are skipped entirely when PI is off.
+The window sizes its height to fit the content (via a `ContentHeightKey` SwiftUI preference reported
+to `DatabaseDetailWindowController`) so the whole dashboard shows without a scroll bar.
+
+#### Query drill-down
+
+Clicking a Top Query opens `QueryDetailWindowController` (its own floating window, `QueryDetailView`).
+It captures the digest id (`db.sql_tokenized.id`) on the `TopItem` and drills in, all scoped by a
+`db.sql_tokenized.id` filter — mirroring the RDS console's Top SQL view:
+
+- **Load over time**: `pi:GetResourceMetrics`, `metric: db.load.avg` (period clamped to ≤ 3600s,
+  the coarsest value PI accepts).
+- **Individual SQL statements**: `pi:DescribeDimensionKeys` grouped by `db.sql`, returning
+  `db.sql.statement` (preview) + `db.sql.id`.
+- **Top users / hosts for the query**: `pi:DescribeDimensionKeys` grouped by `db.user` / `db.host`.
+- **Full SQL text**: `pi:GetDimensionKeyDetails` (group `db.sql`, `db.sql.id`), resolved lazily when
+  a statement row is expanded.
 
 #### Derived Metrics
 
@@ -321,9 +337,9 @@ credentialsProvider: ...                 // Wrong parameter name
       "Action": [
         "rds:DescribeDBInstances",
         "cloudwatch:GetMetricData",
-        "rds:DescribeEvents",
-        "cloudwatch:DescribeAlarms",
-        "pi:DescribeDimensionKeys"
+        "pi:DescribeDimensionKeys",
+        "pi:GetResourceMetrics",
+        "pi:GetDimensionKeyDetails"
       ],
       "Resource": "*"
     }
@@ -331,7 +347,7 @@ credentialsProvider: ...                 // Wrong parameter name
 }
 ```
 
-> Only the first two actions are required. `rds:DescribeEvents` / `cloudwatch:DescribeAlarms` power the events & alarms panel; `pi:DescribeDimensionKeys` powers the Performance Insights panels. All are read-only and degrade gracefully when absent.
+> Only the first two actions are required. The `pi:*` actions power the Performance Insights panels and the query drill-down (`pi:DescribeDimensionKeys` for the Top lists + statement breakdown, `pi:GetResourceMetrics` for the per-query load chart, `pi:GetDimensionKeyDetails` for full SQL text). All are read-only and degrade gracefully when absent.
 
 ### Data Flow
 
@@ -442,8 +458,10 @@ PulseBar/
     ├── RDSMonitoringService.swift          # AWS API integration (RDS, CloudWatch, PI)
     ├── AlertManager.swift                  # Notification logic
     ├── Settings.swift                      # User preferences (threshold, interval)
-    ├── DatabaseDetailWindowController.swift # Detail window + DetailViewModel
+    ├── DatabaseDetailWindowController.swift # Detail window + DetailViewModel (auto-sizes to fit)
     ├── MetricsDashboardView.swift          # SwiftUI + Charts dashboard
+    ├── QueryDetailWindowController.swift   # Query drill-down window + QueryDetailViewModel
+    ├── QueryDetailView.swift               # SwiftUI view for the query drill-down
     └── Models.swift                        # Data structures
 ```
 
@@ -549,7 +567,10 @@ PulseBar/
   - `RDSMetrics` - Collected and calculated menu metrics (incl. `dbLoad`)
   - `AlertState` - Alert tracking state
   - `MetricPoint` / `MetricSeries` / `InstanceTimeSeries` - dashboard time-series
-  - `TopItem` / `PerformanceInsightsData` - Performance Insights breakdowns
+  - `TopItem` / `PerformanceInsightsData` - Performance Insights breakdowns (`TopItem.digestId`
+    carries the query digest id for the drill-down)
+  - `QueryDetail` / `SQLStatement` - per-query drill-down data (load over time, statements behind
+    the digest, users/hosts)
 - **Methods**:
   - `RDSMetrics.hasAlert()` - Check if any threshold breached (ignores -1)
   - `RDSMetrics.getAlertMessage()` - Format notification message (ignores -1)
@@ -849,11 +870,11 @@ GitHub Actions workflows in `.github/workflows/`:
 
 1. **Max Connections Estimation**: Currently estimates based on instance class naming. Should query RDS parameter groups for actual `max_connections` value.
 
-2. **No Historical Data**: Only shows current snapshot. Future: Add trending/graphs.
+2. **Menu snapshot only**: The menu bar shows the current snapshot; historical trends live in the detail dashboard (1D/7D/30D charts), not the menu.
 
 3. **Single Account**: No multi-account aggregation. Each profile is queried separately.
 
-4. **No Performance Insights**: Not integrated with RDS Performance Insights API.
+4. **Performance Insights retention**: PI panels and the query drill-down only cover the last 7 days (an API constraint); the 30D range is clamped accordingly.
 
 5. **Notifications Require Bundle**: Must use `make install` for macOS notifications.
 
@@ -869,10 +890,10 @@ GitHub Actions workflows in `.github/workflows/`:
 | ------------------------ | -------------------------------------------- | ------------------------------------------------------ |
 | Add new menu metric      | `RDSMonitoringService.swift`, `Models.swift` | `fetchInstanceMetrics()`, `RDSMetrics` struct          |
 | Add/change dashboard chart | `RDSMonitoringService.swift`, `MetricsDashboardView.swift` | `fetchTimeSeries()`, `InstanceTimeSeries`, chart group |
-| Change Performance Insights panels | `RDSMonitoringService.swift`, `MetricsDashboardView.swift` | `fetchPerformanceInsights()`, `TopPanel`     |
+| Change Performance Insights panels | `RDSMonitoringService.swift`, `MetricsDashboardView.swift` | `fetchPerformanceInsights()`, `TopPanel`, `TopQueriesPanel` |
+| Change query drill-down   | `RDSMonitoringService.swift`, `QueryDetailWindowController.swift`, `QueryDetailView.swift` | `fetchQueryDetail()`, `fetchFullSQL()`, `QueryDetailViewModel` |
 | Change menu UI layout    | `AppDelegate.swift`                          | `updateMenu()`, `createInstanceMenuItem()`             |
-| Change detail window      | `DatabaseDetailWindowController.swift`       | `init`, `reload(range:)`, `present()`                  |
-| Change events/alarms panel | `RDSMonitoringService.swift`, `MetricsDashboardView.swift` | `fetchInstanceActivity()`, `activitySection`  |
+| Change detail window      | `DatabaseDetailWindowController.swift`       | `init`, `reload(range:)`, `present()`, `resizeToFit(contentHeight:)` |
 | Modify alert logic       | `AlertManager.swift`, `Models.swift`         | `sendAlert()`, `hasAlert()`, `getAlertingMetrics()`    |
 | Change settings/defaults | `Settings.swift`, `AppDelegate.swift`        | `Settings.shared`, `buildSettingsMenuItem()`           |
 | Change replica grouping  | `AppDelegate.swift`, `RDSMonitoringService.swift` | `updateMenu()` (.loaded), `readReplicaSource`     |
